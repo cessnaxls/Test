@@ -30,12 +30,20 @@ def supa(path, method='GET', payload=None, params=None):
 
 def persistent(): return bool(SUPA_URL and SUPA_KEY)
 
+def _from_supabase_row(r):
+ # Map the existing Supabase instagram_profiles schema to the API's internal names.
+ x=dict(r)
+ x['source_url']=x.get('post_url') or ''
+ x['original_image_url']=x.get('image_url') or ''
+ x['thumbnail_b64']=x.get('thumbnail_base64') or ''
+ return x
+
 def fetch_all(device_id):
  if persistent():
   rows=[]; offset=0
   while True:
-   chunk=supa('clip_profiles',params={'device_id':f'eq.{device_id}','select':'*','order':'last_seen.desc','limit':'1000','offset':str(offset)})
-   rows+=chunk
+   chunk=supa('instagram_profiles',params={'device_id':f'eq.{device_id}','select':'*','order':'last_seen.desc','limit':'1000','offset':str(offset)})
+   rows += [_from_supabase_row(r) for r in chunk]
    if len(chunk)<1000: break
    offset+=1000
   return rows
@@ -43,11 +51,27 @@ def fetch_all(device_id):
 
 def save(row):
  if persistent():
-  old=supa('clip_profiles',params={'device_id':f"eq.{row['device_id']}",'username':f"eq.{row['username']}",'select':'first_seen,seen_count'})
-  if old: row['first_seen']=old[0]['first_seen']; row['seen_count']=int(old[0].get('seen_count') or 1)+1
-  else: row['first_seen']=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()); row['seen_count']=1
-  row['last_seen']=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())
-  supa('clip_profiles?on_conflict=device_id,username','POST',row); return
+  old=supa('instagram_profiles',params={'device_id':f"eq.{row['device_id']}",'username':f"eq.{row['username']}",'select':'first_seen,seen_count'})
+  if old:
+   first_seen=old[0]['first_seen']; seen_count=int(old[0].get('seen_count') or 1)+1
+  else:
+   first_seen=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()); seen_count=1
+  last_seen=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())
+  payload={
+   'device_id':row['device_id'],
+   'username':row['username'],
+   'full_name':row.get('full_name') or '',
+   'profile_url':row.get('profile_url') or '',
+   'image_url':row.get('original_image_url') or '',
+   'thumbnail_base64':row.get('thumbnail_b64') or '',
+   'embedding':'['+','.join(str(float(v)) for v in row['embedding'])+']',
+   'source':'ios_shortcut',
+   'post_url':row.get('source_url') or '',
+   'first_seen':first_seen,
+   'last_seen':last_seen,
+   'seen_count':seen_count
+  }
+  supa('instagram_profiles?on_conflict=device_id,username','POST',payload); return
  with db() as c:
   old=c.execute('select first_seen,seen_count from clip_profiles where device_id=? and username=?',(row['device_id'],row['username'])).fetchone(); now=time.time()
   row['first_seen']=old['first_seen'] if old else now; row['last_seen']=now; row['seen_count']=(old['seen_count']+1) if old else 1
@@ -123,7 +147,7 @@ def stats(device_id:str):
 def profiles(device_id:str,limit:int=100): return {'profiles':[result_row(r) for r in fetch_all(device_id)[:min(limit,500)]]}
 @app.delete('/api/live/profiles')
 def clear(device_id:str):
- if persistent(): supa('clip_profiles','DELETE',params={'device_id':f'eq.{device_id}'})
+ if persistent(): supa('instagram_profiles','DELETE',params={'device_id':f'eq.{device_id}'})
  else:
   with db() as c: c.execute('delete from clip_profiles where device_id=?',(device_id,)); c.commit()
  return {'ok':True}
