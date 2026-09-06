@@ -4,3 +4,6 @@
 <section class="card"><h2>2. CLIP Search</h2><div class="search"><input id="q" placeholder="e.g. sunglasses, red hair, beach photo"><button id="search">Visual text search</button><button id="recent" class="secondary">Recent</button></div><p class="sub">Or search with a reference image:</p><div class="search"><input id="imageFile" type="file" accept="image/*"><button id="imageSearch">Search by image</button></div><p id="searchStatus" class="sub"></p><div id="results"></div></section>
 <section class="card"><h2>Storage status</h2><p id="storage" class="sub">Checking…</p><p class="sub">For persistence, configure Supabase in Render. Without it, Render's free filesystem can disappear on spin-down/redeploy.</p></section>
 </main><script src="/static/app.js"></script></body></html>
+
+
+<!-- Shortcut simplified endpoint: POST /api/shortcut/ingest with JSON {"payload":"<JavaScript Result>","device_id":"iphone"}. -->

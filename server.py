@@ -74,6 +74,9 @@ def result_row(r,score=None):
 class Ingest(BaseModel):
  device_id:str=Field(min_length=4,max_length=100); records:list[dict[str,Any]]=Field(default_factory=list,max_length=200); page_url:str|None=None; message:str|None=None
 
+class ShortcutIngest(BaseModel):
+ payload:str=Field(min_length=2,max_length=1000000); device_id:str=Field(default='iphone',min_length=1,max_length=100)
+
 @app.get('/',response_class=HTMLResponse)
 def home(): return (BASE/'web'/'index.html').read_text()
 @app.get('/health')
@@ -81,19 +84,37 @@ def health(): return {'ok':True,'version':'4.0','persistent':persistent(),'clip'
 @app.get('/api/config')
 def config(): return {'persistent':persistent(),'clip_enabled':True,'supabase_configured':persistent()}
 
-@app.post('/api/live/ingest')
-def ingest(req:Ingest):
+def ingest_records(device_id:str, records:list[dict[str,Any]], page_url:str|None=None):
  accepted=0; indexed=0; errors=[]
- for rec in req.records:
+ for rec in records[:200]:
   u=str(rec.get('username','')).strip().lstrip('@').lower()
   if not u or not rec.get('image_url'): continue
   accepted+=1
   try:
    data=download_avatar(str(rec['image_url'])); emb=image_embedding(data)
-   save({'device_id':req.device_id,'username':u,'full_name':str(rec.get('full_name') or '')[:300],'profile_url':str(rec.get('profile_url') or f'https://www.instagram.com/{u}/'),'source_url':str(rec.get('post_url') or req.page_url or ''),'original_image_url':str(rec.get('image_url') or ''),'thumbnail_b64':thumb(data),'embedding':emb})
+   save({'device_id':device_id,'username':u,'full_name':str(rec.get('full_name') or '')[:300],'profile_url':str(rec.get('profile_url') or f'https://www.instagram.com/{u}/'),'source_url':str(rec.get('post_url') or page_url or ''),'original_image_url':str(rec.get('image_url') or ''),'thumbnail_b64':thumb(data),'embedding':emb})
    indexed+=1
   except Exception as e: errors.append(f'{u}: {str(e)[:140]}')
  return {'accepted':accepted,'indexed':indexed,'failed':len(errors),'errors':errors[:10],'persistent':persistent()}
+
+@app.post('/api/live/ingest')
+def ingest(req:Ingest):
+ return ingest_records(req.device_id, req.records, req.page_url)
+
+@app.post('/api/shortcut/ingest')
+def shortcut_ingest(req:ShortcutIngest):
+ try:
+  obj=json.loads(req.payload)
+ except Exception as e:
+  raise HTTPException(400,f'JavaScript result is not valid JSON: {e}')
+ if not isinstance(obj,dict):
+  raise HTTPException(400,'JavaScript result must be a JSON object')
+ records=obj.get('records',[])
+ if not isinstance(records,list):
+  raise HTTPException(400,'JavaScript result records must be an array')
+ result=ingest_records(req.device_id,records,str(obj.get('page_url') or ''))
+ result['scanner_count']=obj.get('count',len(records))
+ return result
 
 @app.get('/api/live/stats')
 def stats(device_id:str):

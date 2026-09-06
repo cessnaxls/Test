@@ -77,3 +77,6 @@ The included Render app supports persistent username/full-name search and recent
 ## Privacy/security note
 
 The Render service does not receive your Instagram password or Safari cookies. The extension reads the Instagram DOM that Safari has permission to expose and sends the extracted profile metadata to the Render URL you configure. Treat the Render deployment and Device ID as private, and add authentication before exposing a production deployment to other users.
+
+
+<!-- Shortcut simplified endpoint: POST /api/shortcut/ingest with JSON {"payload":"<JavaScript Result>","device_id":"iphone"}. -->

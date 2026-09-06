@@ -45,3 +45,6 @@ Add these actions in order:
 ## Search
 
 Open your Render dashboard. Recent profiles appear in the library and the Search field searches usernames and names. Re-running the Shortcut over the same profiles is safe; Render deduplicates by username and updates last-seen metadata.
+
+
+<!-- Shortcut simplified endpoint: POST /api/shortcut/ingest with JSON {"payload":"<JavaScript Result>","device_id":"iphone"}. -->
