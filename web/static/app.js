@@ -8,6 +8,8 @@ async function refresh(){try{
  $('processing').textContent=(s.processing||0).toLocaleString();
  $('count').textContent=(s.indexed||0).toLocaleString();
  $('failed').textContent=(s.failed||0).toLocaleString();
+ $('rate').textContent=`${Number(s.rate_per_sec||0).toFixed(1)}/s`;
+ const eta=s.eta_seconds; $('eta').textContent=eta==null?'':`Estimated time remaining: ${eta>=3600?Math.floor(eta/3600)+'h '+Math.ceil((eta%3600)/60)+'m':eta>=60?Math.floor(eta/60)+'m '+Math.ceil(eta%60)+'s':Math.ceil(eta)+'s'}`;
  const total=Math.max(s.captured||0,0), done=Math.min((s.indexed||0)+(s.failed||0),total);
  const pct=total?Math.round(done/total*100):0;
  $('progressBar').style.width=`${pct}%`;

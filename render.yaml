@@ -15,3 +15,9 @@ services:
         value: sayantan47/clip-vit-b32-onnx
       - key: CLIP_ONNX_FILE
         value: onnx/model_quantized.onnx
+      - key: CLIP_BATCH_SIZE
+        value: "16"
+      - key: AVATAR_DOWNLOAD_WORKERS
+        value: "16"
+      - key: CLIP_INTRA_THREADS
+        value: "2"
