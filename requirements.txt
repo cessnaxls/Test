@@ -5,6 +5,7 @@ pydantic>=2.8
 requests>=2.32
 Pillow>=10.4
 numpy>=1.26
-# Optional semantic image search. The app falls back to username/name search when omitted.
-# torch>=2.2
-# open-clip-torch>=2.26
+python-multipart>=0.0.9
+onnxruntime>=1.19
+transformers>=4.51
+huggingface_hub>=0.30

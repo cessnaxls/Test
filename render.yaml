@@ -7,7 +7,11 @@ services:
     startCommand: gunicorn -k uvicorn.workers.UvicornWorker -w 1 -b 0.0.0.0:$PORT server:app
     healthCheckPath: /health
     envVars:
-      - key: DATA_DIR
-        value: /tmp/instagram-profile-search
       - key: PYTHON_VERSION
         value: 3.12.7
+      - key: HF_HOME
+        value: /tmp/hf
+      - key: CLIP_ONNX_REPO
+        value: sayantan47/clip-vit-b32-onnx
+      - key: CLIP_ONNX_FILE
+        value: onnx/model_quantized.onnx
