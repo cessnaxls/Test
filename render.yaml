@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: instagram-clip-safari
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -k uvicorn.workers.UvicornWorker -w 1 -b 0.0.0.0:$PORT server:app
+    healthCheckPath: /health
+    envVars:
+      - key: DATA_DIR
+        value: /var/data
+      - key: PYTHON_VERSION
+        value: 3.12.7
+    disk:
+      name: instagram-clip-data
+      mountPath: /var/data
+      sizeGB: 5

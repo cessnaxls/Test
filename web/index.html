@@ -1,0 +1,42 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Instagram Live Library</title><link rel="stylesheet" href="/static/app.css"></head>
+<body><main>
+<h1>Instagram Live Library</h1>
+<p class="sub">Turn the Safari extension scanner ON, browse instagram.com normally, and profiles you encounter are deduplicated and added to this persistent Render library automatically.</p>
+
+
+<section class="card shortcut-card">
+  <h2>iPhone Shortcut Collector</h2>
+  <p class="sub">No extension required. In Safari, run your Shortcut on an Instagram page to collect every profile currently loaded in that page and send it to this library.</p>
+  <div class="stats"><div><b id="shortcutDevice">—</b><span>Device ID</span></div><div><b>POST</b><span>/api/live/ingest</span></div></div>
+  <div class="buttons"><button id="copyShortcutJs">Copy Shortcut JavaScript</button><button id="copyDevice" class="secondary">Copy Device ID</button></div>
+  <p id="shortcutCopyStatus" class="sub"></p>
+  <details><summary>Setup entirely on iPhone</summary>
+    <ol class="phone-steps">
+      <li>Tap <b>Copy Shortcut JavaScript</b> above.</li>
+      <li>Open the Shortcuts app and create a new shortcut named <b>Collect Instagram Profiles</b>.</li>
+      <li>Open the shortcut details and enable <b>Show in Share Sheet</b>. Set it to receive <b>Safari Web Pages</b>.</li>
+      <li>Add <b>Run JavaScript on Web Page</b>. Paste the copied JavaScript and set the web page input to <b>Shortcut Input</b>.</li>
+      <li>Add <b>Get Dictionary from Input</b>.</li>
+      <li>Add <b>Get Dictionary Value</b> for <b>records</b>, and another for <b>page_url</b>.</li>
+      <li>Add a <b>Dictionary</b> with: <b>device_id</b> = the Device ID above, <b>records</b> = the records value, <b>page_url</b> = the page_url value, and <b>message</b> = <b>Collected by iOS Shortcut</b>.</li>
+      <li>Add <b>Get Contents of URL</b>. URL: <code id="ingestUrl"></code>. Method: <b>POST</b>. Request Body: <b>JSON</b>. Use the Dictionary from the previous step.</li>
+      <li>Optional: add <b>Show Result</b> after the request so you can see how many profiles Render accepted.</li>
+    </ol>
+  </details>
+  <p class="sub"><b>Use:</b> browse instagram.com in Safari, scroll, then Share → <b>Collect Instagram Profiles</b>. Repeat whenever you want to capture the profiles currently loaded. Render deduplicates repeats automatically.</p>
+</section>
+
+<section class="card live-card">
+  <div class="live-head"><div><h2>Live Safari Scanner</h2><p class="sub compact">The ON/OFF switch lives in the Safari extension popup.</p></div><span id="liveBadge" class="badge off">OFF</span></div>
+  <div class="stats"><div><b id="liveCount">0</b><span>unique profiles</span></div><div><b id="liveSeen">—</b><span>last scanner contact</span></div></div>
+  <p id="device"></p><p id="liveStatus">Waiting for the extension to connect.</p>
+  <div class="search"><input id="q" placeholder="Search collected usernames / names"><button id="search">Search</button><button id="recent" class="secondary">Recent</button></div>
+  <div class="buttons"><button id="refresh" class="secondary">Refresh library</button><button id="clear" class="danger secondary-danger">Clear library</button></div>
+  <div id="results"></div>
+</section>
+
+<details class="card"><summary>Automated collection modes</summary>
+<p class="sub">The previous five Safari-worker modes remain available. Live Scanner does not depend on these jobs.</p>
+<div class="grid"><label>Mode<select id="mode"><option value="likers">Comment likers</option><option value="commenters">Comment authors</option><option value="profile_followers">Profile followers</option><option value="profile_following">Profile following</option><option value="post_stream_likers">Post/reel/profile likes stream</option></select></label><label>Instagram URL / username<input id="url" placeholder="https://www.instagram.com/…"></label><label>Safari worker tabs<input id="windows" type="number" min="1" max="10" value="1"></label><label>Profile limit<input id="limit" type="number" min="1" value="1000"></label><label>Comment button limit<input id="comments" type="number" min="1" value="2000"></label><label>Exact comment-like count<input id="exact" type="number" min="0" placeholder="optional"></label><label>Timer (seconds)<input id="timer" type="number" min="1" placeholder="optional"></label></div><div class="buttons"><button id="start">Start automated job</button><button id="stop" class="danger" disabled>Stop</button></div><p id="status">Idle.</p>
+</details>
+</main><script src="/static/app.js"></script></body></html>

@@ -1,0 +1,10 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+gunicorn>=23.0
+pydantic>=2.8
+requests>=2.32
+Pillow>=10.4
+numpy>=1.26
+# Optional semantic image search. The app falls back to username/name search when omitted.
+# torch>=2.2
+# open-clip-torch>=2.26
