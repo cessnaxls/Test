@@ -48,3 +48,7 @@ Open your Render dashboard. Recent profiles appear in the library and the Search
 
 
 <!-- Shortcut simplified endpoint: POST /api/shortcut/ingest with JSON {"payload":"<JavaScript Result>","device_id":"iphone"}. -->
+
+
+## Clipboard workflow
+Run the collector JavaScript in Safari, then Copy to Clipboard the JavaScript Result. Open the CLIP web app, paste the payload into the import box, and tap Import & Index. No Shortcut HTTP request is required.

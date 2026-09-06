@@ -4,3 +4,6 @@
 .progress-stats{grid-template-columns:repeat(auto-fit,minmax(90px,1fr))}
 .progress-wrap{height:12px;background:rgba(127,127,127,.2);border-radius:999px;overflow:hidden;margin:14px 0 6px}
 .progress-bar{height:100%;background:currentColor;border-radius:999px;transition:width .35s ease}
+
+.paste-actions{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+#profilePayload{width:100%;box-sizing:border-box;min-height:160px;border-radius:12px;padding:12px;font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;resize:vertical}

@@ -1,22 +1,34 @@
 <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Instagram CLIP Search</title><link rel="stylesheet" href="/static/app.css"></head><body><main>
-<h1>Instagram CLIP Search</h1><p class="sub">Scroll Instagram in Safari, run your Shortcut, and this app stores each captured profile photo as a CLIP vector for visual search.</p>
-<section class="card"><h2>1. iPhone Collector</h2><p class="sub">Run the Shortcut every few screens while browsing instagram.com. Captures upload immediately; CLIP indexing continues in the background.</p>
+<h1>Instagram CLIP Search</h1><p class="sub">Copy loaded Instagram profiles with your iPhone Shortcut, paste them here, then search their profile photos with CLIP.</p>
+<section class="card"><h2>1. Import profiles from iPhone</h2>
+<p class="sub">In Instagram Safari, run your Shortcut to copy every profile currently loaded on the page. Then come here, paste once, and import them into the persistent CLIP queue.</p>
+<div class="paste-actions">
+  <button id="pasteClipboard">Paste from Clipboard</button>
+  <button id="importProfiles">Import &amp; Index</button>
+  <button id="clearPaste" class="secondary">Clear</button>
+</div>
+<textarea id="profilePayload" rows="8" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="Paste the copied Instagram profile data here…"></textarea>
+<p id="importStatus" class="sub"></p>
+
 <div class="stats progress-stats">
 <div><b id="captured">0</b><span>Captured</span></div>
 <div><b id="queued">0</b><span>Queued</span></div>
 <div><b id="processing">0</b><span>Indexing now</span></div>
 <div><b id="count">0</b><span>CLIP indexed</span></div>
-<div><b id="failed">0</b><span>Failed</span></div><div><b id="rate">0.0/s</b><span>Index rate</span></div>
+<div><b id="failed">0</b><span>Failed</span></div>
+<div><b id="rate">0.0/s</b><span>Index rate</span></div>
 </div>
 <div class="progress-wrap"><div id="progressBar" class="progress-bar" style="width:0%"></div></div>
 <p id="progressText" class="sub">Waiting for captures…</p><p id="eta" class="sub"></p>
-<div class="buttons"><button id="copyShortcutJs">Copy Shortcut JavaScript</button></div>
 <p id="status" class="sub"></p>
-<details><summary>Shortcut setup</summary><ol>
-<li>Add <b>Run JavaScript on Web Page</b> and paste the collector JavaScript.</li>
-<li>Add <b>Get Contents of URL</b> and POST to <code id="ingestUrl"></code>.</li>
-<li>Use JSON with <b>device_id</b> = <code>iphone</code> and <b>payload</b> = the JavaScript Result.</li>
-</ol></details></section>
+
+<details><summary>One-time Shortcut setup</summary><ol>
+<li>Add <b>Run JavaScript on Web Page</b> and paste the collector JavaScript from the button below.</li>
+<li>Add <b>Copy to Clipboard</b> after it.</li>
+<li>Set Copy to Clipboard to copy the <b>JavaScript Result</b>.</li>
+<li>When browsing Instagram in Safari, run the Shortcut from the Share Sheet. It only copies data; it does not contact Render.</li>
+</ol><div class="buttons"><button id="copyShortcutJs">Copy Collector JavaScript</button></div></details>
+</section>
 <section class="card"><h2>2. CLIP Search</h2><div class="search"><input id="q" placeholder="e.g. sunglasses, red hair, beach photo"><button id="search">Visual text search</button><button id="recent" class="secondary">Recent</button></div><p class="sub">Or search with a reference image:</p><div class="search"><input id="imageFile" type="file" accept="image/*"><button id="imageSearch">Search by image</button></div><p id="searchStatus" class="sub"></p><div id="results"></div></section>
 <section class="card"><h2>Storage status</h2><p id="storage" class="sub">Checking…</p><p class="sub">For persistence, configure Supabase in Render. Without it, Render's free filesystem can disappear on spin-down/redeploy.</p></section>
 </main><script src="/static/app.js"></script></body></html>

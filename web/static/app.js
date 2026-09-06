@@ -1,6 +1,30 @@
-const $=id=>document.getElementById(id);const device='iphone';localStorage.setItem('device_id',device);$('ingestUrl').textContent=`${location.origin}/api/shortcut/ingest`;
+const $=id=>document.getElementById(id);const device='iphone';localStorage.setItem('device_id',device);
 async function api(p,o={}){const r=await fetch(p,o);if(!r.ok)throw Error(await r.text());return r.json()}function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function show(rows){$('results').innerHTML=rows.map(x=>`<div class="profile">${x.image_data_url?`<img loading="lazy" src="${x.image_data_url}">`:'<div class="avatar-placeholder"></div>'}<div><a target="_blank" href="${esc(x.profile_url)}">@${esc(x.username)}</a><div>${esc(x.full_name||'')}</div><div class="meta">${x.score!=null?`CLIP ${Number(x.score).toFixed(3)} · `:''}${x.seen_count?`seen ${x.seen_count}×`:''}</div></div></div>`).join('')||'<p class="sub">No profiles found.</p>'}
+async function importPayload(){
+ const payload=$('profilePayload').value.trim();
+ if(!payload){$('importStatus').textContent='Paste profile data first.';return}
+ $('importStatus').textContent='Importing profiles…';
+ try{
+  const d=await api('/api/shortcut/ingest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_id:device,payload})});
+  const captured=d.captured??d.scanner_count??0, queued=d.queued??0, skipped=d.skipped??0;
+  $('importStatus').textContent=`Imported ${Number(captured).toLocaleString()} profiles · ${Number(queued).toLocaleString()} queued${skipped?` · ${Number(skipped).toLocaleString()} skipped`:''}.`;
+  $('profilePayload').value='';
+  await refresh();
+ }catch(e){$('importStatus').textContent=`Import failed: ${e.message}`}
+}
+$('importProfiles').onclick=importPayload;
+$('clearPaste').onclick=()=>{$('profilePayload').value='';$('importStatus').textContent=''};
+$('pasteClipboard').onclick=async()=>{
+ try{
+  const t=await navigator.clipboard.readText();
+  $('profilePayload').value=t;
+  $('importStatus').textContent=t?'Clipboard pasted. Tap Import & Index.':'Clipboard is empty.';
+ }catch(e){
+  $('profilePayload').focus();
+  $('importStatus').textContent='Safari blocked automatic clipboard access. Tap inside the box and choose Paste.';
+ }
+};
 async function refresh(){try{
  let s=await api(`/api/live/stats?device_id=${encodeURIComponent(device)}`);
  $('captured').textContent=(s.captured||0).toLocaleString();

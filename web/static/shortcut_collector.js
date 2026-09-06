@@ -1,3 +1,4 @@
+/* Copy workflow: Run this on Instagram in Safari, then use Shortcuts 'Copy to Clipboard' on JavaScript Result. */
 /* Instagram Profile Collector for iOS Shortcuts — Run JavaScript on Web Page */
 (() => {
   const BLOCKED = new Set([

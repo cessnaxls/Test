@@ -21,3 +21,7 @@ Use the dashboard's Copy Shortcut JavaScript button. The Shortcut only extracts 
 Use the dashboard for text-to-image CLIP search or upload a reference image for image-to-image CLIP search.
 
 Note: iOS Shortcuts cannot continuously watch Safari. Run the Shortcut periodically as you scroll.
+
+
+## Clipboard workflow
+Run the collector JavaScript in Safari, then Copy to Clipboard the JavaScript Result. Open the CLIP web app, paste the payload into the import box, and tap Import & Index. No Shortcut HTTP request is required.
