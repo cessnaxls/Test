@@ -1,6 +1,22 @@
 <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Instagram CLIP Search</title><link rel="stylesheet" href="/static/app.css"></head><body><main>
 <h1>Instagram CLIP Search</h1><p class="sub">Scroll Instagram in Safari, run your Shortcut, and this app stores each captured profile photo as a CLIP vector for visual search.</p>
-<section class="card"><h2>1. iPhone Collector</h2><p class="sub">Run the Shortcut every few screens while browsing instagram.com. Repeats are safely deduplicated.</p><div class="stats"><div><b id="shortcutDevice">—</b><span>Device ID</span></div><div><b id="count">0</b><span>CLIP indexed</span></div></div><div class="buttons"><button id="copyShortcutJs">Copy Shortcut JavaScript</button><button id="copyDevice" class="secondary">Copy Device ID</button></div><p id="status" class="sub"></p><details><summary>Shortcut setup</summary><ol><li>Shortcut receives <b>Safari Web Pages</b> from Share Sheet.</li><li>Add <b>Run JavaScript on Web Page</b> and paste the collector JavaScript.</li><li>Add <b>Get Dictionary from Input</b>, then extract <b>records</b> and <b>page_url</b>.</li><li>Create a Dictionary: <b>device_id</b>, <b>records</b>, <b>page_url</b>.</li><li>POST JSON with <b>Get Contents of URL</b> to <code id="ingestUrl"></code>.</li></ol></details></section>
+<section class="card"><h2>1. iPhone Collector</h2><p class="sub">Run the Shortcut every few screens while browsing instagram.com. Captures upload immediately; CLIP indexing continues in the background.</p>
+<div class="stats progress-stats">
+<div><b id="captured">0</b><span>Captured</span></div>
+<div><b id="queued">0</b><span>Queued</span></div>
+<div><b id="processing">0</b><span>Indexing now</span></div>
+<div><b id="count">0</b><span>CLIP indexed</span></div>
+<div><b id="failed">0</b><span>Failed</span></div>
+</div>
+<div class="progress-wrap"><div id="progressBar" class="progress-bar" style="width:0%"></div></div>
+<p id="progressText" class="sub">Waiting for captures…</p>
+<div class="buttons"><button id="copyShortcutJs">Copy Shortcut JavaScript</button></div>
+<p id="status" class="sub"></p>
+<details><summary>Shortcut setup</summary><ol>
+<li>Add <b>Run JavaScript on Web Page</b> and paste the collector JavaScript.</li>
+<li>Add <b>Get Contents of URL</b> and POST to <code id="ingestUrl"></code>.</li>
+<li>Use JSON with <b>device_id</b> = <code>iphone</code> and <b>payload</b> = the JavaScript Result.</li>
+</ol></details></section>
 <section class="card"><h2>2. CLIP Search</h2><div class="search"><input id="q" placeholder="e.g. sunglasses, red hair, beach photo"><button id="search">Visual text search</button><button id="recent" class="secondary">Recent</button></div><p class="sub">Or search with a reference image:</p><div class="search"><input id="imageFile" type="file" accept="image/*"><button id="imageSearch">Search by image</button></div><p id="searchStatus" class="sub"></p><div id="results"></div></section>
 <section class="card"><h2>Storage status</h2><p id="storage" class="sub">Checking…</p><p class="sub">For persistence, configure Supabase in Render. Without it, Render's free filesystem can disappear on spin-down/redeploy.</p></section>
 </main><script src="/static/app.js"></script></body></html>

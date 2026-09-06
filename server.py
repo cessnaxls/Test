@@ -1,5 +1,5 @@
 from __future__ import annotations
-import base64, io, json, os, sqlite3, time
+import base64, io, json, os, sqlite3, time, queue, threading
 from pathlib import Path
 from typing import Any
 import numpy as np, requests
@@ -16,6 +16,15 @@ SUPA_URL=os.getenv('SUPABASE_URL','').rstrip('/')
 SUPA_KEY=os.getenv('SUPABASE_SERVICE_ROLE_KEY','')
 app=FastAPI(title='Instagram CLIP Library',version='4.0')
 app.mount('/static',StaticFiles(directory=BASE/'web'/'static'),name='static')
+
+INDEX_QUEUE=queue.Queue()
+INDEX_STATE={}
+INDEX_LOCK=threading.RLock()
+QUEUED_KEYS=set()
+
+def _state(device_id):
+ with INDEX_LOCK:
+  return INDEX_STATE.setdefault(device_id, {'processing':0,'failed':0,'last_error':''})
 
 def db():
  c=sqlite3.connect(DB); c.row_factory=sqlite3.Row
@@ -77,6 +86,84 @@ def save(row):
   row['first_seen']=old['first_seen'] if old else now; row['last_seen']=now; row['seen_count']=(old['seen_count']+1) if old else 1
   c.execute('''insert or replace into clip_profiles(device_id,username,full_name,profile_url,source_url,original_image_url,thumbnail_b64,embedding,first_seen,last_seen,seen_count) values(?,?,?,?,?,?,?,?,?,?,?)''',(row['device_id'],row['username'],row['full_name'],row['profile_url'],row['source_url'],row['original_image_url'],row['thumbnail_b64'],json.dumps(row['embedding']),row['first_seen'],row['last_seen'],row['seen_count'])); c.commit()
 
+
+def save_pending(device_id, rec, page_url=''):
+ u=str(rec.get('username','')).strip().lstrip('@').lower()
+ if not u: return False
+ full=str(rec.get('full_name') or '')[:300]
+ profile=str(rec.get('profile_url') or f'https://www.instagram.com/{u}/')
+ image=str(rec.get('image_url') or '')
+ source_url=str(rec.get('post_url') or page_url or '')
+ if persistent():
+  old=supa('instagram_profiles',params={'device_id':f'eq.{device_id}','username':f'eq.{u}','select':'first_seen,seen_count,embedding,thumbnail_base64'})
+  if old:
+   first_seen=old[0]['first_seen']; seen_count=int(old[0].get('seen_count') or 1)+1
+   embedding=old[0].get('embedding'); thumb_b64=old[0].get('thumbnail_base64') or ''
+  else:
+   first_seen=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()); seen_count=1; embedding=None; thumb_b64=''
+  now=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())
+  payload={'device_id':device_id,'username':u,'full_name':full,'profile_url':profile,'image_url':image,
+           'thumbnail_base64':thumb_b64,'embedding':embedding,'source':'ios_shortcut','post_url':source_url,
+           'first_seen':first_seen,'last_seen':now,'seen_count':seen_count}
+  supa('instagram_profiles?on_conflict=device_id,username','POST',payload)
+ else:
+  with db() as c:
+   old=c.execute('select first_seen,seen_count,embedding,thumbnail_b64 from clip_profiles where device_id=? and username=?',(device_id,u)).fetchone()
+   now=time.time()
+   first_seen=old['first_seen'] if old else now; seen_count=(old['seen_count']+1) if old else 1
+   emb=old['embedding'] if old else None; tb=old['thumbnail_b64'] if old else ''
+   c.execute("insert or replace into clip_profiles(device_id,username,full_name,profile_url,source_url,original_image_url,thumbnail_b64,embedding,first_seen,last_seen,seen_count) values(?,?,?,?,?,?,?,?,?,?,?)",
+             (device_id,u,full,profile,source_url,image,tb,emb,first_seen,now,seen_count)); c.commit()
+ return True
+
+def update_indexed(device_id, username, image_url, data, emb):
+ tb=thumb(data)
+ if persistent():
+  vector='['+','.join(str(float(v)) for v in emb)+']'
+  supa('instagram_profiles','PATCH',
+       {'thumbnail_base64':tb,'embedding':vector,'image_url':image_url,'last_seen':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())},
+       {'device_id':f'eq.{device_id}','username':f'eq.{username}'})
+ else:
+  with db() as c:
+   c.execute('update clip_profiles set thumbnail_b64=?,embedding=?,original_image_url=?,last_seen=? where device_id=? and username=?',
+             (tb,json.dumps(emb),image_url,time.time(),device_id,username)); c.commit()
+
+def enqueue_profile(device_id, rec, page_url=''):
+ u=str(rec.get('username','')).strip().lstrip('@').lower()
+ image=str(rec.get('image_url') or '')
+ if not u or not image: return False
+ save_pending(device_id,rec,page_url)
+ key=(device_id,u)
+ with INDEX_LOCK:
+  if key in QUEUED_KEYS: return True
+  QUEUED_KEYS.add(key)
+ INDEX_QUEUE.put((device_id,u,image))
+ return True
+
+def index_worker():
+ while True:
+  device_id,u,image=INDEX_QUEUE.get()
+  st=_state(device_id)
+  with INDEX_LOCK: st['processing']+=1
+  try:
+   data=download_avatar(image)
+   emb=image_embedding(data)
+   update_indexed(device_id,u,image,data,emb)
+  except Exception as e:
+   with INDEX_LOCK:
+    st['failed']+=1
+    st['last_error']=f'{u}: {str(e)[:180]}'
+  finally:
+   with INDEX_LOCK:
+    st['processing']=max(0,st['processing']-1)
+    QUEUED_KEYS.discard((device_id,u))
+   INDEX_QUEUE.task_done()
+
+@app.on_event('startup')
+def start_index_worker():
+ if not any(t.name=='clip-index-worker' and t.is_alive() for t in threading.enumerate()):
+  threading.Thread(target=index_worker,name='clip-index-worker',daemon=True).start()
+
 def download_avatar(url):
  r=requests.get(url,headers={'User-Agent':'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1','Referer':'https://www.instagram.com/'},timeout=20)
  r.raise_for_status();
@@ -104,22 +191,24 @@ class ShortcutIngest(BaseModel):
 @app.get('/',response_class=HTMLResponse)
 def home(): return (BASE/'web'/'index.html').read_text()
 @app.get('/health')
-def health(): return {'ok':True,'version':'4.0','persistent':persistent(),'clip':'openai/clip-vit-base-patch32 ONNX quantized'}
+def health(): return {'ok':True,'version':'4.1','persistent':persistent(),'clip':'openai/clip-vit-base-patch32 ONNX quantized'}
 @app.get('/api/config')
 def config(): return {'persistent':persistent(),'clip_enabled':True,'supabase_configured':persistent()}
 
 def ingest_records(device_id:str, records:list[dict[str,Any]], page_url:str|None=None):
- accepted=0; indexed=0; errors=[]
+ captured=0; queued=0; skipped=0; errors=[]
  for rec in records[:200]:
   u=str(rec.get('username','')).strip().lstrip('@').lower()
-  if not u or not rec.get('image_url'): continue
-  accepted+=1
+  if not u or not rec.get('image_url'):
+   skipped+=1
+   continue
+  captured+=1
   try:
-   data=download_avatar(str(rec['image_url'])); emb=image_embedding(data)
-   save({'device_id':device_id,'username':u,'full_name':str(rec.get('full_name') or '')[:300],'profile_url':str(rec.get('profile_url') or f'https://www.instagram.com/{u}/'),'source_url':str(rec.get('post_url') or page_url or ''),'original_image_url':str(rec.get('image_url') or ''),'thumbnail_b64':thumb(data),'embedding':emb})
-   indexed+=1
-  except Exception as e: errors.append(f'{u}: {str(e)[:140]}')
- return {'accepted':accepted,'indexed':indexed,'failed':len(errors),'errors':errors[:10],'persistent':persistent()}
+   if enqueue_profile(device_id,rec,page_url or ''): queued+=1
+  except Exception as e:
+   errors.append(f'{u}: {str(e)[:140]}')
+ return {'captured':captured,'queued':queued,'skipped':skipped,'failed_to_queue':len(errors),
+         'errors':errors[:10],'persistent':persistent()}
 
 @app.post('/api/live/ingest')
 def ingest(req:Ingest):
@@ -142,7 +231,17 @@ def shortcut_ingest(req:ShortcutIngest):
 
 @app.get('/api/live/stats')
 def stats(device_id:str):
- rows=fetch_all(device_id); return {'profiles_collected':len(rows),'indexed':sum(1 for r in rows if r.get('embedding')),'persistent':persistent(),'message':('CLIP library ready' if persistent() else 'WARNING: Supabase not configured; using temporary Render storage')}
+ rows=fetch_all(device_id)
+ indexed=sum(1 for r in rows if r.get('embedding'))
+ captured=len(rows)
+ st=_state(device_id)
+ with INDEX_LOCK:
+  processing=st['processing']; failed=st['failed']; last_error=st['last_error']
+ pending=max(captured-indexed,0)
+ queued=max(pending-processing-failed,0)
+ return {'profiles_collected':captured,'captured':captured,'queued':queued,'processing':processing,
+         'indexed':indexed,'failed':failed,'last_error':last_error,'persistent':persistent(),
+         'message':('CLIP indexing in progress' if pending else 'CLIP library ready')}
 @app.get('/api/live/profiles')
 def profiles(device_id:str,limit:int=100): return {'profiles':[result_row(r) for r in fetch_all(device_id)[:min(limit,500)]]}
 @app.delete('/api/live/profiles')
