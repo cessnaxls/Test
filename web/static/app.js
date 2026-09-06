@@ -25,6 +25,17 @@ $('pasteClipboard').onclick=async()=>{
   $('importStatus').textContent='Safari blocked automatic clipboard access. Tap inside the box and choose Paste.';
  }
 };
+$('bulkClear').onclick=()=>{$('bulkText').value='';$('bulkStatus').textContent=''};
+$('bulkImport').onclick=async()=>{
+ const text=$('bulkText').value.trim();
+ if(!text){$('bulkStatus').textContent='Paste usernames or Instagram profile URLs first.';return}
+ $('bulkStatus').textContent='Parsing list and resolving profile images…';
+ try{
+  const d=await api('/api/bulk/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_id:device,text})});
+  $('bulkStatus').textContent=`Parsed ${Number(d.parsed||0).toLocaleString()} · avatars ready ${Number((d.with_avatar_already||0)+(d.avatars_resolved||0)).toLocaleString()} · queued ${Number(d.queued||0).toLocaleString()} · unresolved ${Number(d.unresolved||0).toLocaleString()}.`;
+  await refresh();
+ }catch(e){$('bulkStatus').textContent=`Bulk import failed: ${e.message}`}
+};
 async function refresh(){try{
  let s=await api(`/api/live/stats?device_id=${encodeURIComponent(device)}`);
  $('captured').textContent=(s.captured||0).toLocaleString();

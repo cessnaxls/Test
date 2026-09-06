@@ -1,5 +1,5 @@
 from __future__ import annotations
-import base64, io, json, os, sqlite3, time, threading, concurrent.futures, collections
+import base64, io, json, os, sqlite3, time, threading, concurrent.futures, collections, re, html
 from pathlib import Path
 from typing import Any
 import numpy as np, requests
@@ -249,10 +249,96 @@ class Ingest(BaseModel):
 class ShortcutIngest(BaseModel):
  payload:str=Field(min_length=2,max_length=1000000); device_id:str=Field(default='iphone',min_length=1,max_length=100)
 
+class BulkImport(BaseModel):
+ device_id:str=Field(default='iphone',min_length=1,max_length=100)
+ text:str=Field(min_length=1,max_length=5000000)
+
+
+_USERNAME_RE=re.compile(r'^[A-Za-z0-9._]{1,64}$')
+_IG_URL_RE=re.compile(r'https?://(?:www\.)?instagram\.com/([A-Za-z0-9._]{1,64})(?:/|$)',re.I)
+_IMG_URL_RE=re.compile(r'https?://[^\s,"\']+',re.I)
+
+def _normalize_username(value):
+ v=str(value or '').strip()
+ m=_IG_URL_RE.search(v)
+ if m: v=m.group(1)
+ v=v.lstrip('@').strip().lower()
+ return v if _USERNAME_RE.fullmatch(v) else ''
+
+def _parse_bulk_text(text):
+ found={}
+ # JSON exported from this app/scraper is supported directly.
+ try:
+  obj=json.loads(text)
+  rows=obj.get('records',obj) if isinstance(obj,dict) else obj
+  if isinstance(rows,list):
+   for r in rows:
+    if not isinstance(r,dict): continue
+    u=_normalize_username(r.get('username') or r.get('profile_url'))
+    if not u: continue
+    rec={'username':u,'profile_url':str(r.get('profile_url') or f'https://www.instagram.com/{u}/'),
+         'image_url':str(r.get('image_url') or r.get('original_image_url') or ''),
+         'full_name':str(r.get('full_name') or r.get('name') or ''),'post_url':str(r.get('post_url') or '')}
+    old=found.get(u)
+    if not old or (not old.get('image_url') and rec.get('image_url')): found[u]=rec
+   if found: return list(found.values())
+ except Exception:
+  pass
+
+ # Text lines: username, @username, profile URL, or username<TAB>avatar_url.
+ for raw in text.splitlines():
+  line=raw.strip()
+  if not line: continue
+  ig=_IG_URL_RE.search(line)
+  first=line.split()[0] if line.split() else line
+  u=_normalize_username(ig.group(0) if ig else first)
+  if not u: continue
+  image=''
+  urls=_IMG_URL_RE.findall(line)
+  for url in urls:
+   if 'instagram.com/'+u in url.lower(): continue
+   if any(x in url.lower() for x in ('cdninstagram','fbcdn','scontent')) or re.search(r'\.(?:jpe?g|png|webp)(?:\?|$)',url,re.I):
+    image=url; break
+  rec={'username':u,'profile_url':f'https://www.instagram.com/{u}/','image_url':image,'full_name':'','post_url':''}
+  old=found.get(u)
+  if not old or (not old.get('image_url') and image): found[u]=rec
+ return list(found.values())
+
+def _resolve_avatar(rec):
+ if rec.get('image_url'): return rec, None
+ u=rec['username']; url=f'https://www.instagram.com/{u}/'
+ try:
+  r=requests.get(url,headers={
+   'User-Agent':'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1',
+   'Accept-Language':'en-US,en;q=0.9'
+  },timeout=15)
+  r.raise_for_status()
+  body=html.unescape(r.text)
+  patterns=[
+   r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)',
+   r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',
+   r'"profile_pic_url_hd"\s*:\s*"([^"]+)"',
+   r'"profile_pic_url"\s*:\s*"([^"]+)"'
+  ]
+  image=''
+  for pat in patterns:
+   m=re.search(pat,body,re.I)
+   if m:
+    image=m.group(1).replace(r'\/','/').replace(r'\u0026','&')
+    break
+  if not image: return rec, 'profile image not exposed by Instagram'
+  out=dict(rec); out['image_url']=image
+  # Best-effort full name from og:title.
+  mt=re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)',body,re.I)
+  if mt and not out.get('full_name'): out['full_name']=html.unescape(mt.group(1))[:300]
+  return out,None
+ except Exception as e:
+  return rec,str(e)[:180]
+
 @app.get('/',response_class=HTMLResponse)
 def home(): return (BASE/'web'/'index.html').read_text()
 @app.get('/health')
-def health(): return {'ok':True,'version':'5.0','persistent':persistent(),'clip':'openai/clip-vit-base-patch32 ONNX quantized'}
+def health(): return {'ok':True,'version':'5.1','persistent':persistent(),'clip':'openai/clip-vit-base-patch32 ONNX quantized'}
 @app.get('/api/config')
 def config(): return {'persistent':persistent(),'clip_enabled':True,'supabase_configured':persistent()}
 
@@ -288,6 +374,35 @@ def shortcut_ingest(req:ShortcutIngest):
  result=ingest_records(req.device_id,records,str(obj.get('page_url') or ''))
  result['scanner_count']=obj.get('count',len(records))
  return result
+
+
+@app.post('/api/bulk/import')
+def bulk_import(req:BulkImport):
+ records=_parse_bulk_text(req.text)
+ if not records:
+  raise HTTPException(400,'No Instagram usernames or profile URLs were found')
+ if len(records)>10000:
+  raise HTTPException(400,'Maximum 10,000 unique profiles per import')
+ ready=[r for r in records if r.get('image_url')]
+ unresolved=[r for r in records if not r.get('image_url')]
+ resolved=[]; resolve_errors=[]
+ if unresolved:
+  with concurrent.futures.ThreadPoolExecutor(max_workers=min(DOWNLOAD_WORKERS,16)) as pool:
+   for rec,err in pool.map(_resolve_avatar,unresolved):
+    if err: resolve_errors.append({'username':rec['username'],'error':err})
+    else: resolved.append(rec)
+ queueable=ready+resolved
+ result=ingest_records(req.device_id,queueable,'bulk_import')
+ return {
+  'parsed':len(records),
+  'with_avatar_already':len(ready),
+  'avatars_resolved':len(resolved),
+  'unresolved':len(resolve_errors),
+  'captured':result.get('captured',0),
+  'queued':result.get('queued',0),
+  'failed_to_queue':result.get('failed_to_queue',0),
+  'sample_errors':resolve_errors[:20]
+ }
 
 @app.get('/api/live/stats')
 def stats(device_id:str):

@@ -29,7 +29,13 @@
 <li>When browsing Instagram in Safari, run the Shortcut from the Share Sheet. It only copies data; it does not contact Render.</li>
 </ol><div class="buttons"><button id="copyShortcutJs">Copy Collector JavaScript</button></div></details>
 </section>
-<section class="card"><h2>2. CLIP Search</h2><div class="search"><input id="q" placeholder="e.g. sunglasses, red hair, beach photo"><button id="search">Visual text search</button><button id="recent" class="secondary">Recent</button></div><p class="sub">Or search with a reference image:</p><div class="search"><input id="imageFile" type="file" accept="image/*"><button id="imageSearch">Search by image</button></div><p id="searchStatus" class="sub"></p><div id="results"></div></section>
+<section class="card"><h2>2. Bulk Import</h2>
+<p class="sub">Paste up to 10,000 Instagram usernames or profile URLs. One per line is easiest. You can also paste JSON exported from the scraper. If an avatar URL is included, it goes straight to CLIP; otherwise the server will try to resolve the profile image first.</p>
+<textarea id="bulkText" rows="10" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="@username&#10;https://instagram.com/anotheruser/&#10;thirduser"></textarea>
+<div class="buttons"><button id="bulkImport">Import Bulk List</button><button id="bulkClear" class="secondary">Clear</button></div>
+<p id="bulkStatus" class="sub"></p>
+</section>
+<section class="card"><h2>3. CLIP Search</h2><div class="search"><input id="q" placeholder="e.g. sunglasses, red hair, beach photo"><button id="search">Visual text search</button><button id="recent" class="secondary">Recent</button></div><p class="sub">Or search with a reference image:</p><div class="search"><input id="imageFile" type="file" accept="image/*"><button id="imageSearch">Search by image</button></div><p id="searchStatus" class="sub"></p><div id="results"></div></section>
 <section class="card"><h2>Storage status</h2><p id="storage" class="sub">Checking…</p><p class="sub">For persistence, configure Supabase in Render. Without it, Render's free filesystem can disappear on spin-down/redeploy.</p></section>
 </main><script src="/static/app.js"></script></body></html>
 
