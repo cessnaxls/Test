@@ -9,6 +9,7 @@ _PROCESSOR = None
 _OUTPUTS = None
 
 REPO = os.getenv('CLIP_ONNX_REPO', 'onnx-community/clip-vit-base-patch32-ONNX')
+PROCESSOR_REPO = os.getenv('CLIP_PROCESSOR_REPO', 'openai/clip-vit-base-patch32')
 FILE = os.getenv('CLIP_ONNX_FILE', 'onnx/model_quantized.onnx')
 
 
@@ -23,7 +24,7 @@ def _load():
         import onnxruntime as ort
         from transformers import CLIPProcessor
         path = hf_hub_download(repo_id=REPO, filename=FILE, cache_dir=os.getenv('HF_HOME', '/tmp/hf'))
-        _PROCESSOR = CLIPProcessor.from_pretrained(REPO, cache_dir=os.getenv('HF_HOME', '/tmp/hf'))
+        _PROCESSOR = CLIPProcessor.from_pretrained(PROCESSOR_REPO, cache_dir=os.getenv('HF_HOME', '/tmp/hf'))
         so = ort.SessionOptions()
         so.intra_op_num_threads = max(1, int(os.getenv('CLIP_INTRA_THREADS', '4')))
         so.inter_op_num_threads = 1
