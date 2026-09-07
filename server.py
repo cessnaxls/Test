@@ -16,7 +16,7 @@ BASE=Path(__file__).resolve().parent
 DB=Path('/tmp/clip_profiles.sqlite3')
 SUPA_URL=os.getenv('SUPABASE_URL','').rstrip('/')
 SUPA_KEY=os.getenv('SUPABASE_SERVICE_ROLE_KEY','')
-app=FastAPI(title='Instagram CLIP Library',version='6.0')
+app=FastAPI(title='Instagram CLIP Library',version='7.0-turbo')
 app.add_middleware(
  CORSMiddleware,
  allow_origins=['https://www.instagram.com','https://instagram.com'],
@@ -26,9 +26,14 @@ app.add_middleware(
 )
 app.mount('/static',StaticFiles(directory=BASE/'web'/'static'),name='static')
 
-BATCH_SIZE=max(1,int(os.getenv('CLIP_BATCH_SIZE','16')))
-DOWNLOAD_WORKERS=max(1,int(os.getenv('AVATAR_DOWNLOAD_WORKERS','16')))
-POLL_SECONDS=max(0.2,float(os.getenv('INDEX_POLL_SECONDS','0.5')))
+BATCH_SIZE=max(1,int(os.getenv('CLIP_BATCH_SIZE','32')))
+DOWNLOAD_WORKERS=max(1,int(os.getenv('AVATAR_DOWNLOAD_WORKERS','32')))
+POLL_SECONDS=max(0.05,float(os.getenv('INDEX_POLL_SECONDS','0.15')))
+INGEST_MAX=max(100,int(os.getenv('INGEST_MAX_BATCH','1000')))
+HTTP=requests.Session()
+HTTP.headers.update({'Connection':'keep-alive'})
+adapter=requests.adapters.HTTPAdapter(pool_connections=64,pool_maxsize=64,max_retries=1)
+HTTP.mount('https://',adapter)
 INDEX_LOCK=threading.RLock()
 RATE_EVENTS=collections.deque(maxlen=2000)
 LAST_ERROR=''
@@ -41,7 +46,7 @@ def db():
 def supa(path, method='GET', payload=None, params=None):
  if not (SUPA_URL and SUPA_KEY): raise RuntimeError('Supabase is not configured')
  h={'apikey':SUPA_KEY,'Authorization':f'Bearer {SUPA_KEY}','Content-Type':'application/json','Prefer':'return=representation,resolution=merge-duplicates'}
- r=requests.request(method,f'{SUPA_URL}/rest/v1/{path}',headers=h,json=payload,params=params,timeout=45)
+ r=HTTP.request(method,f'{SUPA_URL}/rest/v1/{path}',headers=h,json=payload,params=params,timeout=45)
  if not r.ok: raise RuntimeError(f'Supabase {r.status_code}: {r.text[:500]}')
  return r.json() if r.text else []
 
@@ -100,19 +105,21 @@ def _iso_now():
 
 def _pending_rows(limit):
  if not persistent(): return []
- # queued + retryable failures. Rows stuck in indexing for >10 minutes are reset by startup/recovery.
  return supa('instagram_profiles',params={
   'embedding':'is.null','index_status':'in.(queued,failed)','index_attempts':'lt.4',
-  'select':'*','order':'last_seen.asc','limit':str(limit)
+  'select':'device_id,username,full_name,profile_url,image_url,source,post_url,first_seen,last_seen,seen_count,index_status,index_attempts',
+  'order':'last_seen.asc','limit':str(limit)
  })
 
 def _claim_rows(rows):
  if not rows: return
- names=[r['username'] for r in rows]
- # Single gunicorn worker means this is sufficient claim coordination for this service.
- for u in names:
-  supa('instagram_profiles','PATCH',{'index_status':'indexing','index_error':None},
-       {'device_id':f"eq.{rows[0]['device_id']}",'username':f'eq.{u}','embedding':'is.null'})
+ by_device={}
+ for r in rows: by_device.setdefault(r['device_id'],[]).append(r['username'])
+ for device_id,names in by_device.items():
+  for i in range(0,len(names),200):
+   chunk=names[i:i+200]
+   supa('instagram_profiles','PATCH',{'index_status':'indexing','index_error':None},
+        {'device_id':f'eq.{device_id}','username':f"in.({','.join(chunk)})",'embedding':'is.null'})
 
 def _bulk_upsert(rows):
  if rows:
@@ -151,6 +158,44 @@ def save_pending(device_id, rec, page_url=''):
   c.execute("insert or replace into clip_profiles(device_id,username,full_name,profile_url,source_url,original_image_url,thumbnail_b64,embedding,first_seen,last_seen,seen_count) values(?,?,?,?,?,?,?,?,?,?,?)",
             (device_id,u,full,profile,source_url,image,tb,emb,first_seen,now,seen_count)); c.commit()
  return True
+
+def save_pending_bulk(device_id, records, page_url=''):
+ if not records: return {'captured':0,'queued':0,'existing':0,'skipped':0}
+ clean={}
+ skipped=0
+ for rec in records[:INGEST_MAX]:
+  u=str(rec.get('username','')).strip().lstrip('@').lower()
+  image=str(rec.get('image_url') or '')
+  if not u or not image:
+   skipped+=1; continue
+  old=clean.get(u)
+  if old is None or (not old.get('image_url') and image): clean[u]=rec
+ if not clean: return {'captured':0,'queued':0,'existing':0,'skipped':skipped}
+ if not persistent():
+  queued=0
+  for rec in clean.values():
+   if save_pending(device_id,rec,page_url): queued+=1
+  return {'captured':len(clean),'queued':queued,'existing':0,'skipped':skipped}
+ names=list(clean)
+ existing=set()
+ for i in range(0,len(names),200):
+  chunk=names[i:i+200]
+  rows=supa('instagram_profiles',params={'device_id':f'eq.{device_id}','username':f"in.({','.join(chunk)})",'select':'username'})
+  existing.update(r['username'] for r in rows)
+ now=_iso_now(); payload=[]
+ for u,rec in clean.items():
+  if u in existing: continue
+  payload.append({
+   'device_id':device_id,'username':u,'full_name':str(rec.get('full_name') or '')[:300],
+   'profile_url':str(rec.get('profile_url') or f'https://www.instagram.com/{u}/'),
+   'image_url':str(rec.get('image_url') or ''),'thumbnail_base64':'','embedding':None,
+   'source':str(rec.get('source') or 'manual_safari_scroll')[:100],
+   'post_url':str(rec.get('post_url') or page_url or '')[:1000],
+   'first_seen':now,'last_seen':now,'seen_count':1,'index_status':'queued','index_attempts':0,
+   'index_error':None,'indexed_at':None
+  })
+ for i in range(0,len(payload),250): _bulk_upsert(payload[i:i+250])
+ return {'captured':len(clean),'queued':len(payload),'existing':len(existing),'skipped':skipped}
 
 def _download_one(row):
  try:
@@ -235,13 +280,13 @@ def start_index_worker():
   threading.Thread(target=index_worker,name='clip-index-worker',daemon=True).start()
 
 def download_avatar(url):
- r=requests.get(url,headers={'User-Agent':'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1','Referer':'https://www.instagram.com/'},timeout=20)
+ r=HTTP.get(url,headers={'User-Agent':'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1','Referer':'https://www.instagram.com/'},timeout=12)
  r.raise_for_status();
  if len(r.content)>8_000_000: raise ValueError('image too large')
  return r.content
 
 def thumb(data):
- im=Image.open(io.BytesIO(data)).convert('RGB'); im.thumbnail((224,224)); out=io.BytesIO(); im.save(out,'JPEG',quality=78,optimize=True); return base64.b64encode(out.getvalue()).decode()
+ im=Image.open(io.BytesIO(data)).convert('RGB'); im.thumbnail((160,160)); out=io.BytesIO(); im.save(out,'JPEG',quality=70); return base64.b64encode(out.getvalue()).decode()
 
 def vec(x):
  if isinstance(x,list): return np.asarray(x,dtype=np.float32)
@@ -253,7 +298,7 @@ def result_row(r,score=None):
  return x
 
 class Ingest(BaseModel):
- device_id:str=Field(min_length=4,max_length=100); records:list[dict[str,Any]]=Field(default_factory=list,max_length=200); page_url:str|None=None; message:str|None=None
+ device_id:str=Field(min_length=4,max_length=100); records:list[dict[str,Any]]=Field(default_factory=list,max_length=1000); page_url:str|None=None; message:str|None=None
 
 class ShortcutIngest(BaseModel):
  payload:str=Field(min_length=2,max_length=1000000); device_id:str=Field(default='iphone',min_length=1,max_length=100)
@@ -268,7 +313,7 @@ class HtmlImport(BaseModel):
 
 class BrowserIngest(BaseModel):
  device_id:str=Field(default='iphone',min_length=1,max_length=100)
- records:list[dict[str,Any]]=Field(default_factory=list,max_length=500)
+ records:list[dict[str,Any]]=Field(default_factory=list,max_length=1000)
  page_url:str|None=Field(default=None,max_length=2000)
 
 
@@ -326,7 +371,7 @@ def _resolve_avatar(rec):
  if rec.get('image_url'): return rec, None
  u=rec['username']; url=f'https://www.instagram.com/{u}/'
  try:
-  r=requests.get(url,headers={
+  r=HTTP.get(url,headers={
    'User-Agent':'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1',
    'Accept-Language':'en-US,en;q=0.9'
   },timeout=15)
@@ -429,23 +474,16 @@ def _extract_html_profiles(raw_html):
 @app.get('/',response_class=HTMLResponse)
 def home(): return (BASE/'web'/'index.html').read_text()
 @app.get('/health')
-def health(): return {'ok':True,'version':'5.2','persistent':persistent(),'clip':'openai/clip-vit-base-patch32 ONNX quantized'}
+def health(): return {'ok':True,'version':'7.0-turbo','persistent':persistent(),'clip':'openai/clip-vit-base-patch32 ONNX quantized'}
 @app.get('/api/config')
 def config(): return {'persistent':persistent(),'clip_enabled':True,'supabase_configured':persistent()}
 
 def ingest_records(device_id:str, records:list[dict[str,Any]], page_url:str|None=None):
- captured=0; queued=0; skipped=0; errors=[]
- for rec in records[:200]:
-  u=str(rec.get('username','')).strip().lstrip('@').lower()
-  if not u or not rec.get('image_url'):
-   skipped+=1; continue
-  captured+=1
-  try:
-   if save_pending(device_id,rec,page_url or ''): queued+=1
-  except Exception as e:
-   errors.append(f'{u}: {str(e)[:140]}')
- return {'captured':captured,'queued':queued,'skipped':skipped,'failed_to_queue':len(errors),
-         'errors':errors[:10],'persistent':persistent()}
+ try:
+  out=save_pending_bulk(device_id,records,page_url or '')
+  return {**out,'failed_to_queue':0,'errors':[],'persistent':persistent()}
+ except Exception as e:
+  return {'captured':0,'queued':0,'existing':0,'skipped':0,'failed_to_queue':len(records),'errors':[str(e)[:240]],'persistent':persistent()}
 
 @app.post('/api/live/ingest')
 def ingest(req:Ingest):
@@ -562,13 +600,13 @@ def browser_ingest(req:BrowserIngest):
 
 @app.get('/api/browser/ping')
 def browser_ping():
- return {'ok':True,'version':'6.0'}
+ return {'ok':True,'version':'7.0-turbo'}
 
 @app.get('/api/live/stats')
 def stats(device_id:str):
  if persistent():
-  rows=supa('instagram_profiles',params={'device_id':f'eq.{device_id}','select':'index_status,embedding'})
-  captured=len(rows); indexed=sum(1 for r in rows if r.get('embedding') or r.get('index_status')=='indexed')
+  rows=supa('instagram_profiles',params={'device_id':f'eq.{device_id}','select':'index_status'})
+  captured=len(rows); indexed=sum(1 for r in rows if r.get('index_status')=='indexed')
   queued=sum(1 for r in rows if r.get('index_status') in (None,'queued'))
   failed=sum(1 for r in rows if r.get('index_status') in ('failed','dead'))
  else:
@@ -590,14 +628,37 @@ def clear(device_id:str):
   with db() as c: c.execute('delete from clip_profiles where device_id=?',(device_id,)); c.commit()
  return {'ok':True}
 
+def _rpc_match(device_id, embedding, limit):
+ payload={'query_embedding':'['+','.join(str(float(v)) for v in embedding)+']','match_device_id':device_id,'match_count':min(limit,200)}
+ try:
+  rows=supa('rpc/match_instagram_profiles','POST',payload)
+  out=[]
+  for r in rows:
+   x={'username':r.get('username'),'full_name':r.get('full_name'),'profile_url':r.get('profile_url'),
+      'source_url':r.get('post_url') or '','original_image_url':r.get('image_url') or '',
+      'seen_count':r.get('seen_count'),'first_seen':r.get('first_seen'),'last_seen':r.get('last_seen'),
+      'image_data_url':'data:image/jpeg;base64,'+(r.get('thumbnail_base64') or '') if r.get('thumbnail_base64') else '',
+      'score':round(float(r.get('similarity') or 0),5)}
+   out.append(x)
+  return out
+ except Exception:
+  return None
+
 @app.get('/api/clip/search/text')
 def search_text(device_id:str,q:str,limit:int=50):
- rows=[r for r in fetch_all(device_id) if r.get('embedding')];
- if not q.strip(): return {'profiles':[result_row(r) for r in rows[:limit]]}
- qv=np.asarray(text_embedding(q.strip()),dtype=np.float32); scored=[(float(np.dot(qv,vec(r['embedding']))),r) for r in rows]; scored.sort(key=lambda x:x[0],reverse=True)
- return {'profiles':[result_row(r,s) for s,r in scored[:min(limit,200)]],'query':q,'semantic':True}
+ if not q.strip():
+  rows=fetch_all(device_id); return {'profiles':[result_row(r) for r in rows[:limit]]}
+ qv=text_embedding(q.strip())
+ matched=_rpc_match(device_id,qv,limit)
+ if matched is not None: return {'profiles':matched,'query':q,'semantic':True,'engine':'supabase_vector'}
+ rows=[r for r in fetch_all(device_id) if r.get('embedding')]
+ qn=np.asarray(qv,dtype=np.float32); scored=[(float(np.dot(qn,vec(r['embedding']))),r) for r in rows]; scored.sort(key=lambda x:x[0],reverse=True)
+ return {'profiles':[result_row(r,sc) for sc,r in scored[:min(limit,200)]],'query':q,'semantic':True,'engine':'fallback'}
 
 @app.post('/api/clip/search/image')
 async def search_image(device_id:str,file:UploadFile=File(...),limit:int=50):
- data=await file.read(); qv=np.asarray(image_embedding(data),dtype=np.float32); rows=[r for r in fetch_all(device_id) if r.get('embedding')]; scored=[(float(np.dot(qv,vec(r['embedding']))),r) for r in rows]; scored.sort(key=lambda x:x[0],reverse=True)
- return {'profiles':[result_row(r,s) for s,r in scored[:min(limit,200)]],'semantic':True}
+ data=await file.read(); qv=image_embedding(data)
+ matched=_rpc_match(device_id,qv,limit)
+ if matched is not None: return {'profiles':matched,'semantic':True,'engine':'supabase_vector'}
+ rows=[r for r in fetch_all(device_id) if r.get('embedding')]; qn=np.asarray(qv,dtype=np.float32); scored=[(float(np.dot(qn,vec(r['embedding']))),r) for r in rows]; scored.sort(key=lambda x:x[0],reverse=True)
+ return {'profiles':[result_row(r,sc) for sc,r in scored[:min(limit,200)]],'semantic':True,'engine':'fallback'}

@@ -25,8 +25,11 @@ def _load():
         path = hf_hub_download(repo_id=REPO, filename=FILE, cache_dir=os.getenv('HF_HOME', '/tmp/hf'))
         _PROCESSOR = CLIPProcessor.from_pretrained(REPO, cache_dir=os.getenv('HF_HOME', '/tmp/hf'))
         so = ort.SessionOptions()
-        so.intra_op_num_threads = max(1, int(os.getenv('CLIP_INTRA_THREADS', '2')))
+        so.intra_op_num_threads = max(1, int(os.getenv('CLIP_INTRA_THREADS', '4')))
         so.inter_op_num_threads = 1
+        so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        so.enable_cpu_mem_arena = True
+        so.enable_mem_pattern = True
         _SESSION = ort.InferenceSession(path, sess_options=so, providers=['CPUExecutionProvider'])
         _OUTPUTS = [o.name for o in _SESSION.get_outputs()]
 
