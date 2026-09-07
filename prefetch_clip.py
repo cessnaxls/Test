@@ -1,1 +1,1 @@
-print('Remote TinyCLIP mode: no local CLIP prefetch needed.')
+print('Local CLIP loads lazily at runtime; skipping build-time prefetch.')

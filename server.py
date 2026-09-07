@@ -16,7 +16,7 @@ BASE=Path(__file__).resolve().parent
 DB=Path('/tmp/clip_profiles.sqlite3')
 SUPA_URL=os.getenv('SUPABASE_URL','').rstrip('/')
 SUPA_KEY=os.getenv('SUPABASE_SERVICE_ROLE_KEY','')
-app=FastAPI(title='Instagram CLIP Library',version='10.0-reliable-fast')
+app=FastAPI(title='Instagram CLIP Library',version='11.0-local-multiworker')
 app.add_middleware(
  CORSMiddleware,
  allow_origins=['https://www.instagram.com','https://instagram.com'],
@@ -38,11 +38,11 @@ INDEX_LOCK=threading.RLock()
 RATE_EVENTS=collections.deque(maxlen=2000)
 LAST_ERROR=''
 PROCESSING=0
+INDEX_WORKERS=max(1,int(os.getenv('CLIP_INDEX_WORKERS','2')))
+WORKER_BATCH_SIZE=max(1,int(os.getenv('CLIP_WORKER_BATCH_SIZE','16')))
+WORKER_DOWNLOADS=max(1,int(os.getenv('CLIP_WORKER_DOWNLOADS','8')))
+CLAIM_LOCK=threading.Lock()
 
-REPLICATE_API_TOKEN=os.getenv('REPLICATE_API_TOKEN','').strip()
-REPLICATE_MODEL=os.getenv('REPLICATE_MODEL','negu63/tinyclip').strip()
-REPLICATE_CONCURRENCY=max(1,int(os.getenv('REPLICATE_CONCURRENCY','12')))
-REPLICATE_WAIT=max(5,int(os.getenv('REPLICATE_WAIT_SECONDS','60')))
 
 def db():
  c=sqlite3.connect(DB); c.row_factory=sqlite3.Row
@@ -278,128 +278,59 @@ def _rate():
   return len(RATE_EVENTS)/span
 
 
-def _replicate_predict(input_payload):
- if not REPLICATE_API_TOKEN:
-  raise RuntimeError('REPLICATE_API_TOKEN is not configured')
- url=f'https://api.replicate.com/v1/models/{REPLICATE_MODEL}/predictions'
- headers={
-  'Authorization':f'Token {REPLICATE_API_TOKEN}',
-  'Content-Type':'application/json',
-  'Prefer':f'wait={REPLICATE_WAIT}'
- }
- last=''
- for attempt in range(4):
-  try:
-   r=HTTP.post(url,headers=headers,json={'input':input_payload},timeout=REPLICATE_WAIT+15)
-   if not r.ok:
-    last=f'Replicate {r.status_code}: {r.text[:300]}'
-    if r.status_code in (408,409,429,500,502,503,504) and attempt<3:
-     time.sleep(0.5*(2**attempt))
-     continue
-    raise RuntimeError(last)
-   obj=r.json()
-   if obj.get('status')=='succeeded':
-    return obj.get('output') or {}
-   get_url=(obj.get('urls') or {}).get('get')
-   deadline=time.time()+REPLICATE_WAIT+15
-   while get_url and time.time()<deadline:
-    time.sleep(0.12)
-    rr=HTTP.get(get_url,headers={'Authorization':f'Token {REPLICATE_API_TOKEN}'},timeout=20)
-    if not rr.ok:
-     if rr.status_code in (429,500,502,503,504):
-      time.sleep(0.5)
-      continue
-     raise RuntimeError(f'Replicate poll {rr.status_code}')
-    obj=rr.json()
-    if obj.get('status')=='succeeded':
-     return obj.get('output') or {}
-    if obj.get('status') in ('failed','canceled'):
-     raise RuntimeError(str(obj.get('error') or obj.get('status'))[:300])
-   last='Replicate prediction timed out'
-  except Exception as e:
-   last=str(e)
-   if attempt<3:
-    time.sleep(0.5*(2**attempt))
-    continue
-   raise
- raise RuntimeError(last or 'Replicate prediction failed')
-
-def remote_image_embedding(data):
- b64=base64.b64encode(data).decode('ascii')
- out=_replicate_predict({'image_base64':b64})
- vec=out.get('image_vector') if isinstance(out,dict) else None
- if not vec or len(vec)!=512:
-  raise RuntimeError('TinyCLIP image embedding missing or wrong dimension')
- a=np.asarray(vec,dtype=np.float32)
- a=a/max(float(np.linalg.norm(a)),1e-12)
- return a.tolist()
-
-def remote_text_embedding(text):
- out=_replicate_predict({'text':text})
- vec=out.get('text_vector') if isinstance(out,dict) else None
- if not vec or len(vec)!=512:
-  raise RuntimeError('TinyCLIP text embedding missing or wrong dimension')
- a=np.asarray(vec,dtype=np.float32)
- a=a/max(float(np.linalg.norm(a)),1e-12)
- return a.tolist()
-
-def _embed_many_remote_safe(datas):
- out=[None]*len(datas)
- errors=[None]*len(datas)
- def one(i):
-  try:
-   out[i]=remote_image_embedding(datas[i])
-  except Exception as e:
-   errors[i]=str(e)[:240]
- workers=min(REPLICATE_CONCURRENCY,max(1,len(datas)))
- with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-  list(pool.map(one,range(len(datas))))
- return out,errors
-
-def index_worker():
+def index_worker(worker_id=0):
  global PROCESSING, LAST_ERROR
- pool=concurrent.futures.ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS)
+ pool=concurrent.futures.ThreadPoolExecutor(max_workers=WORKER_DOWNLOADS)
  while True:
+  rows=[]
   try:
    if not persistent():
-    time.sleep(2); continue
-   rows=_pending_rows(BATCH_SIZE)
+    time.sleep(2)
+    continue
+
+   # Local claim lock prevents two worker threads in this Render process
+   # from pulling the same Supabase rows before either marks them indexing.
+   with CLAIM_LOCK:
+    rows=_pending_rows(WORKER_BATCH_SIZE)
+    if rows:
+     _claim_rows(rows)
+
    if not rows:
-    time.sleep(POLL_SECONDS); continue
-   _claim_rows(rows)
-   with INDEX_LOCK: PROCESSING=len(rows)
+    time.sleep(POLL_SECONDS)
+    continue
+
+   with INDEX_LOCK:
+    PROCESSING += len(rows)
+
+   # Stage 1: download/decode avatar bytes in parallel.
    results=list(pool.map(_download_one,rows))
    good_rows=[]; datas=[]
    for row,data,err in results:
-    if err or data is None: _mark_failed(row,err or 'avatar download failed')
-    else: good_rows.append(row); datas.append(data)
-   if good_rows:
-    if REPLICATE_API_TOKEN:
-     embeddings,embed_errors=_embed_many_remote_safe(datas)
-     ok_rows=[]; ok_datas=[]; ok_embs=[]
-     for row,data,emb,err in zip(good_rows,datas,embeddings,embed_errors):
-      if err or emb is None:
-       _mark_failed(row,f'Remote CLIP: {err or "missing embedding"}')
-      else:
-       ok_rows.append(row); ok_datas.append(data); ok_embs.append(emb)
-     if ok_rows:
-      _mark_indexed(ok_rows,ok_datas,ok_embs)
+    if err or data is None:
+     _mark_failed(row,err or 'avatar load failed')
     else:
-     try:
-      embeddings=image_embeddings(datas)
-      _mark_indexed(good_rows,datas,embeddings)
-     except Exception as e:
-      for row in good_rows: _mark_failed(row,f'Local CLIP batch: {str(e)[:180]}')
-  except Exception as e:
-   LAST_ERROR=str(e)[:240]
-   time.sleep(2)
-  finally:
-   with INDEX_LOCK: PROCESSING=0
+     good_rows.append(row)
+     datas.append(data)
 
-REPLICATE_API_TOKEN=os.getenv('REPLICATE_API_TOKEN','').strip()
-REPLICATE_MODEL=os.getenv('REPLICATE_MODEL','negu63/tinyclip').strip()
-REPLICATE_CONCURRENCY=max(1,int(os.getenv('REPLICATE_CONCURRENCY','12')))
-REPLICATE_WAIT=max(5,int(os.getenv('REPLICATE_WAIT_SECONDS','60')))
+   if not good_rows:
+    continue
+
+   # Stage 2: shared ONNX CLIP session. Each worker can submit batches
+   # concurrently without loading another copy of the model.
+   try:
+    embeddings=image_embeddings(datas)
+    _mark_indexed(good_rows,datas,embeddings)
+   except Exception as e:
+    for row in good_rows:
+     _mark_failed(row,f'Local CLIP worker {worker_id}: {str(e)[:180]}')
+
+  except Exception as e:
+   LAST_ERROR=f'worker {worker_id}: {str(e)[:220]}'
+   time.sleep(0.5)
+  finally:
+   if rows:
+    with INDEX_LOCK:
+     PROCESSING=max(0,PROCESSING-len(rows))
 
 def recover_stale_jobs():
  if not persistent(): return
@@ -415,8 +346,11 @@ def recover_stale_jobs():
 @app.on_event('startup')
 def start_index_worker():
  recover_stale_jobs()
- if not any(t.name=='clip-index-worker' and t.is_alive() for t in threading.enumerate()):
-  threading.Thread(target=index_worker,name='clip-index-worker',daemon=True).start()
+ existing={t.name for t in threading.enumerate() if t.is_alive()}
+ for i in range(INDEX_WORKERS):
+  name=f'clip-index-worker-{i+1}'
+  if name not in existing:
+   threading.Thread(target=index_worker,args=(i+1,),name=name,daemon=True).start()
 
 def download_avatar(url):
  r=HTTP.get(url,headers={'User-Agent':'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1','Referer':'https://www.instagram.com/'},timeout=12)
@@ -613,7 +547,7 @@ def _extract_html_profiles(raw_html):
 @app.get('/',response_class=HTMLResponse)
 def home(): return (BASE/'web'/'index.html').read_text()
 @app.get('/health')
-def health(): return {'ok':True,'version':'10.0-reliable-fast','persistent':persistent(),'clip':'openai/clip-vit-base-patch32 ONNX quantized'}
+def health(): return {'ok':True,'version':'11.0-local-multiworker','persistent':persistent(),'clip':'openai/clip-vit-base-patch32 ONNX quantized'}
 @app.get('/api/config')
 def config(): return {'persistent':persistent(),'clip_enabled':True,'supabase_configured':persistent()}
 
@@ -739,7 +673,7 @@ def browser_ingest(req:BrowserIngest):
 
 @app.get('/api/browser/ping')
 def browser_ping():
- return {'ok':True,'version':'10.0-reliable-fast'}
+ return {'ok':True,'version':'11.0-local-multiworker'}
 
 @app.get('/api/live/stats')
 def stats(device_id:str):
@@ -771,7 +705,7 @@ def stats(device_id:str):
  return {'profiles_collected':captured,'captured':captured,'queued':queued,'processing':processing,
          'indexed':indexed,'failed':failed,'last_error':last_error,'persistent':persistent(),
          'rate_per_sec':round(rate,2),'eta_seconds':round(eta) if eta is not None else None,
-         'batch_size':BATCH_SIZE,'download_workers':DOWNLOAD_WORKERS,
+         'batch_size':WORKER_BATCH_SIZE,'download_workers':WORKER_DOWNLOADS,'index_workers':INDEX_WORKERS,
          'message':('CLIP indexing in progress' if remaining else 'CLIP library ready')}
 @app.get('/api/live/profiles')
 def profiles(device_id:str,limit:int=100): return {'profiles':[result_row(r) for r in fetch_all(device_id)[:min(limit,500)]]}
