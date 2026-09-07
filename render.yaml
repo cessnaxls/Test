@@ -10,7 +10,7 @@ services:
       - key: PYTHON_VERSION
         value: 3.12.7
       - key: CLIP_BATCH_SIZE
-        value: "64"
+        value: "32"
       - key: AVATAR_DOWNLOAD_WORKERS
         value: "16"
       - key: INDEX_POLL_SECONDS
@@ -20,6 +20,6 @@ services:
       - key: REPLICATE_MODEL
         value: negu63/tinyclip
       - key: REPLICATE_CONCURRENCY
-        value: "12"
+        value: "8"
       - key: REPLICATE_WAIT_SECONDS
         value: "60"

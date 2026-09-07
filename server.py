@@ -16,7 +16,7 @@ BASE=Path(__file__).resolve().parent
 DB=Path('/tmp/clip_profiles.sqlite3')
 SUPA_URL=os.getenv('SUPABASE_URL','').rstrip('/')
 SUPA_KEY=os.getenv('SUPABASE_SERVICE_ROLE_KEY','')
-app=FastAPI(title='Instagram CLIP Library',version='7.0-turbo')
+app=FastAPI(title='Instagram CLIP Library',version='10.0-reliable-fast')
 app.add_middleware(
  CORSMiddleware,
  allow_origins=['https://www.instagram.com','https://instagram.com'],
@@ -112,7 +112,7 @@ def _pending_rows(limit):
  if not persistent(): return []
  return supa('instagram_profiles',params={
   'embedding':'is.null','index_status':'in.(queued,failed)','index_attempts':'lt.4',
-  'select':'device_id,username,full_name,profile_url,image_url,source,post_url,first_seen,last_seen,seen_count,index_status,index_attempts',
+  'select':'device_id,username,full_name,profile_url,image_url,avatar_base64,source,post_url,first_seen,last_seen,seen_count,index_status,index_attempts',
   'order':'last_seen.asc','limit':str(limit)
  })
 
@@ -287,24 +287,42 @@ def _replicate_predict(input_payload):
   'Content-Type':'application/json',
   'Prefer':f'wait={REPLICATE_WAIT}'
  }
- r=HTTP.post(url,headers=headers,json={'input':input_payload},timeout=REPLICATE_WAIT+15)
- if not r.ok:
-  raise RuntimeError(f'Replicate {r.status_code}: {r.text[:300]}')
- obj=r.json()
- # Sync mode often returns output immediately. If not, poll the prediction URL.
- if obj.get('status')=='succeeded':
-  return obj.get('output') or {}
- get_url=(obj.get('urls') or {}).get('get')
- deadline=time.time()+REPLICATE_WAIT+15
- while get_url and time.time()<deadline:
-  time.sleep(0.15)
-  rr=HTTP.get(get_url,headers={'Authorization':f'Token {REPLICATE_API_TOKEN}'},timeout=20)
-  if not rr.ok: raise RuntimeError(f'Replicate poll {rr.status_code}')
-  obj=rr.json()
-  if obj.get('status')=='succeeded': return obj.get('output') or {}
-  if obj.get('status') in ('failed','canceled'):
-   raise RuntimeError(str(obj.get('error') or obj.get('status'))[:300])
- raise RuntimeError('Replicate prediction timed out')
+ last=''
+ for attempt in range(4):
+  try:
+   r=HTTP.post(url,headers=headers,json={'input':input_payload},timeout=REPLICATE_WAIT+15)
+   if not r.ok:
+    last=f'Replicate {r.status_code}: {r.text[:300]}'
+    if r.status_code in (408,409,429,500,502,503,504) and attempt<3:
+     time.sleep(0.5*(2**attempt))
+     continue
+    raise RuntimeError(last)
+   obj=r.json()
+   if obj.get('status')=='succeeded':
+    return obj.get('output') or {}
+   get_url=(obj.get('urls') or {}).get('get')
+   deadline=time.time()+REPLICATE_WAIT+15
+   while get_url and time.time()<deadline:
+    time.sleep(0.12)
+    rr=HTTP.get(get_url,headers={'Authorization':f'Token {REPLICATE_API_TOKEN}'},timeout=20)
+    if not rr.ok:
+     if rr.status_code in (429,500,502,503,504):
+      time.sleep(0.5)
+      continue
+     raise RuntimeError(f'Replicate poll {rr.status_code}')
+    obj=rr.json()
+    if obj.get('status')=='succeeded':
+     return obj.get('output') or {}
+    if obj.get('status') in ('failed','canceled'):
+     raise RuntimeError(str(obj.get('error') or obj.get('status'))[:300])
+   last='Replicate prediction timed out'
+  except Exception as e:
+   last=str(e)
+   if attempt<3:
+    time.sleep(0.5*(2**attempt))
+    continue
+   raise
+ raise RuntimeError(last or 'Replicate prediction failed')
 
 def remote_image_embedding(data):
  b64=base64.b64encode(data).decode('ascii')
@@ -325,21 +343,18 @@ def remote_text_embedding(text):
  a=a/max(float(np.linalg.norm(a)),1e-12)
  return a.tolist()
 
-def _embed_many_remote(datas):
+def _embed_many_remote_safe(datas):
  out=[None]*len(datas)
- next_i=0
- lock=threading.Lock()
- def worker():
-  nonlocal next_i
-  while True:
-   with lock:
-    i=next_i; next_i+=1
-   if i>=len(datas): return
+ errors=[None]*len(datas)
+ def one(i):
+  try:
    out[i]=remote_image_embedding(datas[i])
- with concurrent.futures.ThreadPoolExecutor(max_workers=min(REPLICATE_CONCURRENCY,max(1,len(datas)))) as pool:
-  futs=[pool.submit(worker) for _ in range(min(REPLICATE_CONCURRENCY,max(1,len(datas))))]
-  for f in futs: f.result()
- return out
+  except Exception as e:
+   errors[i]=str(e)[:240]
+ workers=min(REPLICATE_CONCURRENCY,max(1,len(datas)))
+ with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+  list(pool.map(one,range(len(datas))))
+ return out,errors
 
 def index_worker():
  global PROCESSING, LAST_ERROR
@@ -359,11 +374,22 @@ def index_worker():
     if err or data is None: _mark_failed(row,err or 'avatar download failed')
     else: good_rows.append(row); datas.append(data)
    if good_rows:
-    try:
-     embeddings=_embed_many_remote(datas) if REPLICATE_API_TOKEN else image_embeddings(datas)
-     _mark_indexed(good_rows,datas,embeddings)
-    except Exception as e:
-     for row in good_rows: _mark_failed(row,f'CLIP batch: {str(e)[:180]}')
+    if REPLICATE_API_TOKEN:
+     embeddings,embed_errors=_embed_many_remote_safe(datas)
+     ok_rows=[]; ok_datas=[]; ok_embs=[]
+     for row,data,emb,err in zip(good_rows,datas,embeddings,embed_errors):
+      if err or emb is None:
+       _mark_failed(row,f'Remote CLIP: {err or "missing embedding"}')
+      else:
+       ok_rows.append(row); ok_datas.append(data); ok_embs.append(emb)
+     if ok_rows:
+      _mark_indexed(ok_rows,ok_datas,ok_embs)
+    else:
+     try:
+      embeddings=image_embeddings(datas)
+      _mark_indexed(good_rows,datas,embeddings)
+     except Exception as e:
+      for row in good_rows: _mark_failed(row,f'Local CLIP batch: {str(e)[:180]}')
   except Exception as e:
    LAST_ERROR=str(e)[:240]
    time.sleep(2)
@@ -377,9 +403,12 @@ REPLICATE_WAIT=max(5,int(os.getenv('REPLICATE_WAIT_SECONDS','60')))
 
 def recover_stale_jobs():
  if not persistent(): return
- # Render can die while a batch is marked indexing. Treat all such rows as queued on process start.
  try:
   supa('instagram_profiles','PATCH',{'index_status':'queued'}, {'embedding':'is.null','index_status':'eq.indexing'})
+  # Recover rows that failed under the old CDN-download bug when Safari bytes are present.
+  supa('instagram_profiles','PATCH',
+       {'index_status':'queued','index_attempts':0,'index_error':None},
+       {'embedding':'is.null','index_status':'in.(failed,dead)','avatar_base64':'not.is.null'})
  except Exception:
   pass
 
@@ -584,7 +613,7 @@ def _extract_html_profiles(raw_html):
 @app.get('/',response_class=HTMLResponse)
 def home(): return (BASE/'web'/'index.html').read_text()
 @app.get('/health')
-def health(): return {'ok':True,'version':'9.0-replicate','persistent':persistent(),'clip':'openai/clip-vit-base-patch32 ONNX quantized'}
+def health(): return {'ok':True,'version':'10.0-reliable-fast','persistent':persistent(),'clip':'openai/clip-vit-base-patch32 ONNX quantized'}
 @app.get('/api/config')
 def config(): return {'persistent':persistent(),'clip_enabled':True,'supabase_configured':persistent()}
 
@@ -710,7 +739,7 @@ def browser_ingest(req:BrowserIngest):
 
 @app.get('/api/browser/ping')
 def browser_ping():
- return {'ok':True,'version':'9.0-replicate'}
+ return {'ok':True,'version':'10.0-reliable-fast'}
 
 @app.get('/api/live/stats')
 def stats(device_id:str):
