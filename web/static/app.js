@@ -57,6 +57,18 @@ $('importHtml').onclick=async()=>{
   await refresh();
  }catch(e){$('htmlStatus').textContent=`HTML import failed: ${e.message}`}
 };
+$('clearLibrary').onclick=async()=>{
+ const ok=confirm('Clear ALL scraped profiles, queued jobs, CLIP vectors, and failed rows for this iPhone library? This cannot be undone.');
+ if(!ok)return;
+ $('clearLibraryStatus').textContent='Clearing scraped profiles…';
+ try{
+  const d=await api(`/api/live/profiles?device_id=${encodeURIComponent(device)}`,{method:'DELETE'});
+  $('results').innerHTML='';
+  $('q').value='';
+  $('clearLibraryStatus').textContent=`Cleared ${Number(d.deleted||0).toLocaleString()} scraped profiles. Reset the Instagram scanner history too if you want to scrape the same people again.`;
+  await refresh();
+ }catch(e){$('clearLibraryStatus').textContent=`Clear failed: ${e.message}`}
+};
 async function refresh(){try{
  let s=await api(`/api/live/stats?device_id=${encodeURIComponent(device)}`);
  $('captured').textContent=(s.captured||0).toLocaleString();

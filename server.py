@@ -641,12 +641,27 @@ def browser_ping():
 @app.get('/api/live/stats')
 def stats(device_id:str):
  if persistent():
-  rows=supa('instagram_profiles',params={'device_id':f'eq.{device_id}','select':'index_status'})
-  captured=len(rows); indexed=sum(1 for r in rows if r.get('index_status')=='indexed')
-  queued=sum(1 for r in rows if r.get('index_status') in (None,'queued'))
-  failed=sum(1 for r in rows if r.get('index_status') in ('failed','dead'))
+  captured=indexed=queued=failed=0
+  offset=0
+  page=1000
+  while True:
+   rows=supa('instagram_profiles',params={
+    'device_id':f'eq.{device_id}',
+    'select':'index_status',
+    'order':'last_seen.desc',
+    'limit':str(page),
+    'offset':str(offset)
+   })
+   if not rows: break
+   captured += len(rows)
+   indexed += sum(1 for r in rows if r.get('index_status')=='indexed')
+   queued += sum(1 for r in rows if r.get('index_status') in (None,'queued','indexing'))
+   failed += sum(1 for r in rows if r.get('index_status') in ('failed','dead'))
+   if len(rows) < page: break
+   offset += page
  else:
-  rows=fetch_all(device_id); captured=len(rows); indexed=sum(1 for r in rows if r.get('embedding')); queued=max(captured-indexed,0); failed=0
+  rows=fetch_all(device_id)
+  captured=len(rows); indexed=sum(1 for r in rows if r.get('embedding')); queued=max(captured-indexed,0); failed=0
  with INDEX_LOCK:
   processing=PROCESSING; last_error=LAST_ERROR
  rate=_rate(); remaining=max(captured-indexed-failed,0); eta=(remaining/rate if rate>0 else None)
@@ -659,27 +674,22 @@ def stats(device_id:str):
 def profiles(device_id:str,limit:int=100): return {'profiles':[result_row(r) for r in fetch_all(device_id)[:min(limit,500)]]}
 @app.delete('/api/live/profiles')
 def clear(device_id:str):
- if persistent(): supa('instagram_profiles','DELETE',params={'device_id':f'eq.{device_id}'})
+ deleted=0
+ if persistent():
+  # Count in pages first for accurate confirmation.
+  offset=0
+  while True:
+   rows=supa('instagram_profiles',params={'device_id':f'eq.{device_id}','select':'username','limit':'1000','offset':str(offset)})
+   if not rows: break
+   deleted += len(rows)
+   if len(rows)<1000: break
+   offset += 1000
+  supa('instagram_profiles','DELETE',params={'device_id':f'eq.{device_id}'})
  else:
-  with db() as c: c.execute('delete from clip_profiles where device_id=?',(device_id,)); c.commit()
- return {'ok':True}
-
-def _rpc_match(device_id, embedding, limit):
- payload={'query_embedding':'['+','.join(str(float(v)) for v in embedding)+']','match_device_id':device_id,'match_count':min(limit,200)}
- try:
-  rows=supa('rpc/match_instagram_profiles','POST',payload)
-  out=[]
-  for r in rows:
-   x={'username':r.get('username'),'full_name':r.get('full_name'),'profile_url':r.get('profile_url'),
-      'source_url':r.get('post_url') or '','original_image_url':r.get('image_url') or '',
-      'seen_count':r.get('seen_count'),'first_seen':r.get('first_seen'),'last_seen':r.get('last_seen'),
-      'image_data_url':'data:image/jpeg;base64,'+(r.get('thumbnail_base64') or '') if r.get('thumbnail_base64') else '',
-      'score':round(float(r.get('similarity') or 0),5)}
-   out.append(x)
-  return out
- except Exception:
-  return None
-
+  with db() as c:
+   deleted=c.execute('select count(*) n from clip_profiles where device_id=?',(device_id,)).fetchone()['n']
+   c.execute('delete from clip_profiles where device_id=?',(device_id,)); c.commit()
+ return {'ok':True,'deleted':deleted}
 @app.get('/api/clip/search/text')
 def search_text(device_id:str,q:str,limit:int=50):
  if not q.strip():

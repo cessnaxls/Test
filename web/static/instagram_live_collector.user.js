@@ -267,6 +267,18 @@
     updateUI();
   }
 
+  function resetHistory() {
+    queue = [];
+    seenOrder = [];
+    seen = new Set();
+    sent = 0;
+    pageAdded = 0;
+    localStorage.removeItem(K_QUEUE);
+    localStorage.removeItem(K_SEEN);
+    localStorage.setItem(K_SENT, '0');
+    updateUI('history reset');
+  }
+
   function updateUI(extra='') {
     const box = document.getElementById('__clip_live_collector');
     if (!box) return;
@@ -280,13 +292,14 @@
     if (document.getElementById('__clip_live_collector')) return;
     const box = document.createElement('div');
     box.id='__clip_live_collector';
-    box.innerHTML=`<div class="clip-line"><span class="clip-dot"></span><strong class="clip-state">AVATAR TURBO OFF</strong></div><div class="clip-meta">page +0 · queued ${queue.length} · sent ${sent}</div><div class="clip-buttons"><button data-toggle type="button">Turn On</button><button data-flush type="button">Send Now</button></div>`;
+    box.innerHTML=`<div class="clip-line"><span class="clip-dot"></span><strong class="clip-state">AVATAR TURBO OFF</strong></div><div class="clip-meta">page +0 · queued ${queue.length} · sent ${sent}</div><div class="clip-buttons"><button data-toggle type="button">Turn On</button><button data-flush type="button">Send Now</button><button data-reset type="button">Reset</button></div>`;
     Object.assign(box.style,{position:'fixed',right:'10px',bottom:'18px',zIndex:'2147483647',background:'rgba(20,20,20,.94)',color:'#fff',padding:'10px 12px',borderRadius:'14px',font:'12px -apple-system,BlinkMacSystemFont,sans-serif',boxShadow:'0 4px 20px rgba(0,0,0,.35)',minWidth:'190px'});
     const style=document.createElement('style');
     style.textContent=`#__clip_live_collector .clip-line{display:flex;align-items:center;gap:7px;margin-bottom:4px}#__clip_live_collector .clip-dot{width:9px;height:9px;border-radius:50%;display:inline-block}#__clip_live_collector .clip-meta{opacity:.82;margin-bottom:7px}#__clip_live_collector .clip-buttons{display:flex;gap:6px}#__clip_live_collector button{font:inherit;border:0;border-radius:9px;padding:6px 9px;background:#fff;color:#111}`;
     document.documentElement.appendChild(style); document.documentElement.appendChild(box);
     box.querySelector('[data-toggle]').onclick=()=>setEnabled(!enabled);
     box.querySelector('[data-flush]').onclick=()=>flush();
+    box.querySelector('[data-reset]').onclick=()=>{ if (confirm('Reset local scanner history and queued unsent profiles?')) resetHistory(); };
     updateUI();
   }
 
