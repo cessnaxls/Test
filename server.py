@@ -2,6 +2,7 @@ from __future__ import annotations
 import base64, io, json, os, sqlite3, time, threading, concurrent.futures, collections, re, html
 from pathlib import Path
 from typing import Any
+from html.parser import HTMLParser
 import numpy as np, requests
 from PIL import Image
 from fastapi import FastAPI, HTTPException, UploadFile, File
@@ -253,6 +254,10 @@ class BulkImport(BaseModel):
  device_id:str=Field(default='iphone',min_length=1,max_length=100)
  text:str=Field(min_length=1,max_length=5000000)
 
+class HtmlImport(BaseModel):
+ device_id:str=Field(default='iphone',min_length=1,max_length=100)
+ html:str=Field(min_length=1,max_length=15000000)
+
 
 _USERNAME_RE=re.compile(r'^[A-Za-z0-9._]{1,64}$')
 _IG_URL_RE=re.compile(r'https?://(?:www\.)?instagram\.com/([A-Za-z0-9._]{1,64})(?:/|$)',re.I)
@@ -335,10 +340,83 @@ def _resolve_avatar(rec):
  except Exception as e:
   return rec,str(e)[:180]
 
+
+class _InstagramHTMLParser(HTMLParser):
+ def __init__(self):
+  super().__init__(convert_charrefs=True)
+  self.records={}
+  self.anchor_stack=[]
+  self.blocked={'explore','reels','accounts','direct','stories','p','reel','tv','about','developer','legal','privacy','terms','web','emails','challenge','api','directory','push','settings'}
+
+ def _username(self, href):
+  if not href: return ''
+  try:
+   m=re.search(r'(?:https?://(?:www\.)?instagram\.com)?/([A-Za-z0-9._]{1,64})(?:/|(?:\?|#|$))',href,re.I)
+   if not m: return ''
+   u=m.group(1).lower()
+   if u in self.blocked: return ''
+   return u if re.fullmatch(r'[a-z0-9._]{1,64}',u,re.I) else ''
+  except Exception:
+   return ''
+
+ def handle_starttag(self, tag, attrs):
+  d=dict(attrs)
+  if tag=='a':
+   u=self._username(d.get('href',''))
+   self.anchor_stack.append(u)
+   if u and u not in self.records:
+    self.records[u]={'username':u,'profile_url':f'https://www.instagram.com/{u}/','image_url':'','full_name':'','post_url':''}
+  elif tag=='img':
+   src=d.get('src') or d.get('data-src') or ''
+   alt=(d.get('alt') or '').strip()
+   if self.anchor_stack:
+    u=self.anchor_stack[-1]
+    if u and u in self.records and src:
+     rec=self.records[u]
+     if not rec.get('image_url'):
+      rec['image_url']=src
+     if alt and not rec.get('full_name'):
+      # Keep alt text only when it looks person/profile-like, not huge post captions.
+      if len(alt)<=160:
+       rec['full_name']=alt
+
+ def handle_endtag(self, tag):
+  if tag=='a' and self.anchor_stack:
+   self.anchor_stack.pop()
+
+def _extract_html_profiles(raw_html):
+ parser=_InstagramHTMLParser()
+ try:
+  parser.feed(raw_html)
+ except Exception:
+  pass
+ found=parser.records
+
+ # Fallback: mine embedded JSON / escaped HTML for profile links and avatar URLs.
+ for m in re.finditer(r'(?:https?:\\/\\/www\.instagram\.com\\/|https?://www\.instagram\.com/|href=["\']\/)([A-Za-z0-9._]{1,64})(?:\\/|/|["\'])',raw_html,re.I):
+  u=m.group(1).lower()
+  if u in parser.blocked or not re.fullmatch(r'[a-z0-9._]{1,64}',u,re.I): continue
+  found.setdefault(u,{'username':u,'profile_url':f'https://www.instagram.com/{u}/','image_url':'','full_name':'','post_url':''})
+
+ # Try to associate CDN image URLs found close to a username occurrence.
+ # This is best-effort only; the resolver can fill remaining avatars.
+ cdn_re=re.compile(r'https?(?::|%3A)?(?:\\\\?/){2}[^"\s<]*(?:cdninstagram|fbcdn|scontent)[^"\s<]*',re.I)
+ for u,rec in list(found.items()):
+  if rec.get('image_url'): continue
+  pos=raw_html.lower().find(u.lower())
+  if pos<0: continue
+  chunk=raw_html[max(0,pos-2500):pos+5000]
+  mm=cdn_re.search(chunk)
+  if mm:
+   img=html.unescape(mm.group(0)).replace(r'\/','/').replace(r'\u0026','&')
+   rec['image_url']=img
+
+ return list(found.values())
+
 @app.get('/',response_class=HTMLResponse)
 def home(): return (BASE/'web'/'index.html').read_text()
 @app.get('/health')
-def health(): return {'ok':True,'version':'5.1','persistent':persistent(),'clip':'openai/clip-vit-base-patch32 ONNX quantized'}
+def health(): return {'ok':True,'version':'5.2','persistent':persistent(),'clip':'openai/clip-vit-base-patch32 ONNX quantized'}
 @app.get('/api/config')
 def config(): return {'persistent':persistent(),'clip_enabled':True,'supabase_configured':persistent()}
 
@@ -401,6 +479,34 @@ def bulk_import(req:BulkImport):
   'captured':result.get('captured',0),
   'queued':result.get('queued',0),
   'failed_to_queue':result.get('failed_to_queue',0),
+  'sample_errors':resolve_errors[:20]
+ }
+
+
+@app.post('/api/html/import')
+def html_import(req:HtmlImport):
+ records=_extract_html_profiles(req.html)
+ if not records:
+  raise HTTPException(400,'No Instagram profile links were found in the pasted HTML')
+ if len(records)>10000:
+  records=records[:10000]
+ ready=[r for r in records if r.get('image_url')]
+ unresolved=[r for r in records if not r.get('image_url')]
+ resolved=[]; resolve_errors=[]
+ if unresolved:
+  with concurrent.futures.ThreadPoolExecutor(max_workers=min(DOWNLOAD_WORKERS,16)) as pool:
+   for rec,err in pool.map(_resolve_avatar,unresolved):
+    if err: resolve_errors.append({'username':rec['username'],'error':err})
+    else: resolved.append(rec)
+ queueable=ready+resolved
+ result=ingest_records(req.device_id,queueable,'html_import')
+ return {
+  'extracted':len(records),
+  'avatars_in_html':len(ready),
+  'avatars_resolved':len(resolved),
+  'unresolved':len(resolve_errors),
+  'queued':result.get('queued',0),
+  'captured':result.get('captured',0),
   'sample_errors':resolve_errors[:20]
  }
 

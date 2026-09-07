@@ -36,6 +36,27 @@ $('bulkImport').onclick=async()=>{
   await refresh();
  }catch(e){$('bulkStatus').textContent=`Bulk import failed: ${e.message}`}
 };
+$('clearHtml').onclick=()=>{$('htmlPayload').value='';$('htmlStatus').textContent=''};
+$('pasteHtml').onclick=async()=>{
+ try{
+  const t=await navigator.clipboard.readText();
+  $('htmlPayload').value=t;
+  $('htmlStatus').textContent=t?`Pasted ${(t.length/1000000).toFixed(2)} MB of HTML. Tap Extract Profiles & Index.`:'Clipboard is empty.';
+ }catch(e){
+  $('htmlPayload').focus();
+  $('htmlStatus').textContent='Safari blocked automatic clipboard access. Tap inside the box and choose Paste.';
+ }
+};
+$('importHtml').onclick=async()=>{
+ const raw=$('htmlPayload').value;
+ if(!raw.trim()){$('htmlStatus').textContent='Paste Instagram HTML first.';return}
+ $('htmlStatus').textContent='Extracting profiles from HTML and resolving avatars…';
+ try{
+  const d=await api('/api/html/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({device_id:device,html:raw})});
+  $('htmlStatus').textContent=`Extracted ${Number(d.extracted||0).toLocaleString()} profiles · avatars in HTML ${Number(d.avatars_in_html||0).toLocaleString()} · resolved ${Number(d.avatars_resolved||0).toLocaleString()} · queued ${Number(d.queued||0).toLocaleString()} · unresolved ${Number(d.unresolved||0).toLocaleString()}.`;
+  await refresh();
+ }catch(e){$('htmlStatus').textContent=`HTML import failed: ${e.message}`}
+};
 async function refresh(){try{
  let s=await api(`/api/live/stats?device_id=${encodeURIComponent(device)}`);
  $('captured').textContent=(s.captured||0).toLocaleString();
