@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Instagram CLIP Live Scroll Collector TURBO
+// @name         Instagram CLIP Live Scroll Collector AVATAR TURBO
 // @namespace    local.clip.collector
-// @version      2.0.0
-// @description  High-throughput Instagram profile collector for manual Safari scrolling.
+// @version      3.0.0
+// @description  High-throughput collector that uploads authenticated avatar bytes for CLIP indexing.
 // @match        https://www.instagram.com/*
 // @match        https://instagram.com/*
 // @run-at       document-idle
@@ -13,8 +13,9 @@
 
   const API_BASE = 'https://instagram-profile-search.onrender.com';
   const DEVICE_ID = 'iphone';
-  const BATCH_SIZE = 100;
-  const FLUSH_MS = 750;
+  const BATCH_SIZE = 25;
+  const AVATAR_FETCH_WORKERS = 8;
+  const FLUSH_MS = 400;
   const MAX_LOCAL_QUEUE = 20000;
   const MAX_SEEN = 30000;
 
@@ -24,10 +25,10 @@
     'directory','push','settings','notifications'
   ]);
 
-  const K_ENABLED = 'clip_live_enabled_v2';
-  const K_QUEUE = 'clip_live_queue_v2';
-  const K_SEEN = 'clip_live_seen_v2';
-  const K_SENT = 'clip_live_sent_v2';
+  const K_ENABLED = 'clip_live_enabled_v3';
+  const K_QUEUE = 'clip_live_queue_v3';
+  const K_SEEN = 'clip_live_seen_v3';
+  const K_SENT = 'clip_live_sent_v3';
 
   let enabled = localStorage.getItem(K_ENABLED) === '1';
   let queue = readArray(K_QUEUE);
@@ -119,7 +120,7 @@
       full_name: nearbyName(a, username),
       profile_url: `https://www.instagram.com/${username}/`,
       image_url: nearestAvatar(a),
-      source: 'manual_safari_scroll_turbo',
+      source: 'manual_safari_scroll_avatar_turbo',
       post_url: location.href.split('?')[0],
       observed_at: Date.now()
     };
@@ -151,12 +152,71 @@
     if (queue.length >= BATCH_SIZE) flush();
   }
 
+  async function blobToAvatarBase64(blob) {
+    try {
+      const bitmap = await createImageBitmap(blob);
+      const size = 160;
+      const canvas = document.createElement('canvas');
+      canvas.width = size; canvas.height = size;
+      const ctx = canvas.getContext('2d', {alpha:false});
+      const scale = Math.max(size / bitmap.width, size / bitmap.height);
+      const w = bitmap.width * scale, h = bitmap.height * scale;
+      ctx.drawImage(bitmap, (size-w)/2, (size-h)/2, w, h);
+      if (bitmap.close) bitmap.close();
+      return canvas.toDataURL('image/jpeg', 0.72).split(',',2)[1] || '';
+    } catch (_) {
+      return await new Promise((resolve) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(String(fr.result || '').split(',',2)[1] || '');
+        fr.onerror = () => resolve('');
+        fr.readAsDataURL(blob);
+      });
+    }
+  }
+
+  async function fetchAvatarBytes(rec) {
+    if (!rec.image_url) return rec;
+    try {
+      if (rec.image_url.startsWith('data:image/')) {
+        return {...rec, avatar_base64: rec.image_url.split(',',2)[1] || ''};
+      }
+      const r = await fetch(rec.image_url, {
+        method:'GET',
+        mode:'cors',
+        credentials:'include',
+        cache:'force-cache'
+      });
+      if (!r.ok) throw new Error(`avatar ${r.status}`);
+      const blob = await r.blob();
+      if (!blob.type.startsWith('image/')) throw new Error('not image');
+      const avatar_base64 = await blobToAvatarBase64(blob);
+      return avatar_base64 ? {...rec, avatar_base64} : rec;
+    } catch (_) {
+      return rec;
+    }
+  }
+
+  async function hydrateAvatars(batch) {
+    const out = new Array(batch.length);
+    let next = 0;
+    async function worker() {
+      while (true) {
+        const i = next++;
+        if (i >= batch.length) return;
+        out[i] = await fetchAvatarBytes(batch[i]);
+      }
+    }
+    await Promise.all(Array.from({length:Math.min(AVATAR_FETCH_WORKERS,batch.length)}, worker));
+    return out;
+  }
+
   async function flush() {
     if (!enabled || flushing || queue.length === 0) return;
     flushing = true;
     updateUI('sending');
-    const batch = queue.slice(0, BATCH_SIZE);
+    const rawBatch = queue.slice(0, BATCH_SIZE);
     try {
+      const batch = await hydrateAvatars(rawBatch);
       const r = await fetch(`${API_BASE}/api/browser/ingest`, {
         method: 'POST', mode: 'cors', credentials: 'omit',
         headers: {'Content-Type': 'application/json'},
@@ -211,7 +271,7 @@
     const box = document.getElementById('__clip_live_collector');
     if (!box) return;
     box.querySelector('.clip-dot').style.background = enabled ? '#2ecc71' : '#999';
-    box.querySelector('.clip-state').textContent = enabled ? 'TURBO ON' : 'Scanner OFF';
+    box.querySelector('.clip-state').textContent = enabled ? 'TURBO ON' : 'AVATAR TURBO OFF';
     box.querySelector('.clip-meta').textContent = `page +${pageAdded} · queued ${queue.length} · sent ${sent}${extra ? ' · '+extra : ''}`;
     box.querySelector('[data-toggle]').textContent = enabled ? 'Turn Off' : 'Turn On';
   }
@@ -220,7 +280,7 @@
     if (document.getElementById('__clip_live_collector')) return;
     const box = document.createElement('div');
     box.id='__clip_live_collector';
-    box.innerHTML=`<div class="clip-line"><span class="clip-dot"></span><strong class="clip-state">Scanner OFF</strong></div><div class="clip-meta">page +0 · queued ${queue.length} · sent ${sent}</div><div class="clip-buttons"><button data-toggle type="button">Turn On</button><button data-flush type="button">Send Now</button></div>`;
+    box.innerHTML=`<div class="clip-line"><span class="clip-dot"></span><strong class="clip-state">AVATAR TURBO OFF</strong></div><div class="clip-meta">page +0 · queued ${queue.length} · sent ${sent}</div><div class="clip-buttons"><button data-toggle type="button">Turn On</button><button data-flush type="button">Send Now</button></div>`;
     Object.assign(box.style,{position:'fixed',right:'10px',bottom:'18px',zIndex:'2147483647',background:'rgba(20,20,20,.94)',color:'#fff',padding:'10px 12px',borderRadius:'14px',font:'12px -apple-system,BlinkMacSystemFont,sans-serif',boxShadow:'0 4px 20px rgba(0,0,0,.35)',minWidth:'190px'});
     const style=document.createElement('style');
     style.textContent=`#__clip_live_collector .clip-line{display:flex;align-items:center;gap:7px;margin-bottom:4px}#__clip_live_collector .clip-dot{width:9px;height:9px;border-radius:50%;display:inline-block}#__clip_live_collector .clip-meta{opacity:.82;margin-bottom:7px}#__clip_live_collector .clip-buttons{display:flex;gap:6px}#__clip_live_collector button{font:inherit;border:0;border-radius:9px;padding:6px 9px;background:#fff;color:#111}`;

@@ -160,48 +160,84 @@ def save_pending(device_id, rec, page_url=''):
  return True
 
 def save_pending_bulk(device_id, records, page_url=''):
- if not records: return {'captured':0,'queued':0,'existing':0,'skipped':0}
+ if not records: return {'captured':0,'queued':0,'existing':0,'requeued':0,'skipped':0}
  clean={}
  skipped=0
  for rec in records[:INGEST_MAX]:
   u=str(rec.get('username','')).strip().lstrip('@').lower()
   image=str(rec.get('image_url') or '')
-  if not u or not image:
+  avatar_b64=str(rec.get('avatar_base64') or rec.get('avatar_data_base64') or '')
+  if avatar_b64.startswith('data:'):
+   avatar_b64=avatar_b64.split(',',1)[1] if ',' in avatar_b64 else ''
+  if not u or (not image and not avatar_b64):
    skipped+=1; continue
+  rec=dict(rec); rec['avatar_base64']=avatar_b64
   old=clean.get(u)
-  if old is None or (not old.get('image_url') and image): clean[u]=rec
- if not clean: return {'captured':0,'queued':0,'existing':0,'skipped':skipped}
+  if old is None or (not old.get('avatar_base64') and avatar_b64): clean[u]=rec
+ if not clean: return {'captured':0,'queued':0,'existing':0,'requeued':0,'skipped':skipped}
  if not persistent():
   queued=0
   for rec in clean.values():
    if save_pending(device_id,rec,page_url): queued+=1
-  return {'captured':len(clean),'queued':queued,'existing':0,'skipped':skipped}
+  return {'captured':len(clean),'queued':queued,'existing':0,'requeued':0,'skipped':skipped}
+
  names=list(clean)
- existing=set()
- for i in range(0,len(names),200):
-  chunk=names[i:i+200]
-  rows=supa('instagram_profiles',params={'device_id':f'eq.{device_id}','username':f"in.({','.join(chunk)})",'select':'username'})
-  existing.update(r['username'] for r in rows)
- now=_iso_now(); payload=[]
- for u,rec in clean.items():
-  if u in existing: continue
-  payload.append({
-   'device_id':device_id,'username':u,'full_name':str(rec.get('full_name') or '')[:300],
-   'profile_url':str(rec.get('profile_url') or f'https://www.instagram.com/{u}/'),
-   'image_url':str(rec.get('image_url') or ''),'thumbnail_base64':'','embedding':None,
-   'source':str(rec.get('source') or 'manual_safari_scroll')[:100],
-   'post_url':str(rec.get('post_url') or page_url or '')[:1000],
-   'first_seen':now,'last_seen':now,'seen_count':1,'index_status':'queued','index_attempts':0,
-   'index_error':None,'indexed_at':None
+ existing={}
+ for i in range(0,len(names),150):
+  chunk=names[i:i+150]
+  rows=supa('instagram_profiles',params={
+   'device_id':f'eq.{device_id}',
+   'username':f"in.({','.join(chunk)})",
+   'select':'device_id,username,full_name,profile_url,image_url,thumbnail_base64,embedding,source,post_url,first_seen,last_seen,seen_count,index_status,index_attempts,index_error,indexed_at,avatar_base64'
   })
- for i in range(0,len(payload),250): _bulk_upsert(payload[i:i+250])
- return {'captured':len(clean),'queued':len(payload),'existing':len(existing),'skipped':skipped}
+  existing.update({r['username']:r for r in rows})
+
+ now=_iso_now(); payload=[]; requeued=0
+ for u,rec in clean.items():
+  prior=existing.get(u)
+  avatar_b64=rec.get('avatar_base64') or ''
+  if prior:
+   # Preserve already indexed rows; fresh browser bytes can recover failed/dead/pending rows.
+   if prior.get('embedding') or prior.get('index_status')=='indexed':
+    continue
+   row=dict(prior)
+   row['full_name']=str(rec.get('full_name') or row.get('full_name') or '')[:300]
+   row['profile_url']=str(rec.get('profile_url') or row.get('profile_url') or f'https://www.instagram.com/{u}/')
+   row['image_url']=str(rec.get('image_url') or row.get('image_url') or '')
+   row['avatar_base64']=avatar_b64 or row.get('avatar_base64') or ''
+   row['source']=str(rec.get('source') or row.get('source') or 'manual_safari_scroll')[:100]
+   row['post_url']=str(rec.get('post_url') or page_url or row.get('post_url') or '')[:1000]
+   row['last_seen']=now
+   row['seen_count']=int(row.get('seen_count') or 1)+1
+   row['index_status']='queued'
+   row['index_attempts']=0
+   row['index_error']=None
+   row['indexed_at']=None
+   payload.append(row); requeued+=1
+  else:
+   payload.append({
+    'device_id':device_id,'username':u,'full_name':str(rec.get('full_name') or '')[:300],
+    'profile_url':str(rec.get('profile_url') or f'https://www.instagram.com/{u}/'),
+    'image_url':str(rec.get('image_url') or ''),'avatar_base64':avatar_b64,
+    'thumbnail_base64':'','embedding':None,
+    'source':str(rec.get('source') or 'manual_safari_scroll')[:100],
+    'post_url':str(rec.get('post_url') or page_url or '')[:1000],
+    'first_seen':now,'last_seen':now,'seen_count':1,'index_status':'queued','index_attempts':0,
+    'index_error':None,'indexed_at':None
+   })
+ for i in range(0,len(payload),100): _bulk_upsert(payload[i:i+100])
+ return {'captured':len(clean),'queued':len(payload),'existing':len(existing),'requeued':requeued,'skipped':skipped}
 
 def _download_one(row):
  try:
-  return row, download_avatar(str(row.get('image_url') or '')), None
+  avatar_b64=str(row.get('avatar_base64') or '')
+  if avatar_b64:
+   data=base64.b64decode(avatar_b64,validate=False)
+   if not data: raise ValueError('empty uploaded avatar')
+   return row,data,None
+  return row,download_avatar(str(row.get('image_url') or '')),None
  except Exception as e:
-  return row, None, str(e)[:240]
+  return row,None,str(e)[:240]
 
 def _mark_failed(row, message):
  global LAST_ERROR
@@ -218,7 +254,7 @@ def _mark_indexed(rows, datas, embeddings):
   x['thumbnail_base64']=thumb(data)
   x['embedding']='['+','.join(str(float(v)) for v in emb)+']'
   x['index_status']='indexed'; x['index_attempts']=int(row.get('index_attempts') or 0)+1
-  x['index_error']=None; x['indexed_at']=now; x['last_seen']=row.get('last_seen') or now
+  x['index_error']=None; x['indexed_at']=now; x['last_seen']=row.get('last_seen') or now; x['avatar_base64']=None
   # Remove helper/unknown aliases if any.
   for k in ['source_url','original_image_url','thumbnail_b64']:
    x.pop(k,None)
@@ -474,7 +510,7 @@ def _extract_html_profiles(raw_html):
 @app.get('/',response_class=HTMLResponse)
 def home(): return (BASE/'web'/'index.html').read_text()
 @app.get('/health')
-def health(): return {'ok':True,'version':'7.0-turbo','persistent':persistent(),'clip':'openai/clip-vit-base-patch32 ONNX quantized'}
+def health(): return {'ok':True,'version':'8.0-avatar-upload','persistent':persistent(),'clip':'openai/clip-vit-base-patch32 ONNX quantized'}
 @app.get('/api/config')
 def config(): return {'persistent':persistent(),'clip_enabled':True,'supabase_configured':persistent()}
 
@@ -600,7 +636,7 @@ def browser_ingest(req:BrowserIngest):
 
 @app.get('/api/browser/ping')
 def browser_ping():
- return {'ok':True,'version':'7.0-turbo'}
+ return {'ok':True,'version':'8.0-avatar-upload'}
 
 @app.get('/api/live/stats')
 def stats(device_id:str):
