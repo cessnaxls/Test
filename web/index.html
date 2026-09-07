@@ -1,69 +1,28 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Instagram CLIP Search</title><link rel="stylesheet" href="/static/app.css"></head><body><main>
-<h1>Instagram CLIP Search</h1><p class="sub">Copy loaded Instagram profiles with your iPhone Shortcut, paste them here, then search their profile photos with CLIP.</p>
-<section class="card"><h2>Live Safari Scroll Collector</h2>
-<p class="sub">Use this when you want to manually scroll an Instagram followers/following/liked-by page. The browser-side collector watches new profile rows, deduplicates them, retries uploads, and sends batches directly into the CLIP queue.</p>
-<div class="buttons"><a class="button-link" href="/static/instagram_live_collector.user.js" download>Download Live Collector Script</a></div>
-<p class="sub"><b>In your Safari extension/userscript:</b> run the script on <code>instagram.com</code>. A small floating Scanner ON/OFF panel will appear. Turn it on, then scroll normally. The panel shows locally queued and successfully sent profile counts.</p>
-<p class="sub">Collection target: <code>https://instagram-profile-search.onrender.com</code> · Device library: <code>iphone</code></p>
-</section>
-<section class="card"><h2>1. Import profiles from iPhone</h2>
-<p class="sub">In Instagram Safari, run your Shortcut to copy every profile currently loaded on the page. Then come here, paste once, and import them into the persistent CLIP queue.</p>
-<div class="paste-actions">
-  <button id="pasteClipboard">Paste from Clipboard</button>
-  <button id="importProfiles">Import &amp; Index</button>
-  <button id="clearPaste" class="secondary">Clear</button>
-</div>
-<textarea id="profilePayload" rows="8" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="Paste the copied Instagram profile data here…"></textarea>
-<p id="importStatus" class="sub"></p>
-
-<div class="stats progress-stats">
-<div><b id="captured">0</b><span>Captured</span></div>
-<div><b id="queued">0</b><span>Queued</span></div>
-<div><b id="processing">0</b><span>Indexing now</span></div>
-<div><b id="count">0</b><span>CLIP indexed</span></div>
-<div><b id="failed">0</b><span>Failed</span></div>
-<div><b id="rate">0.0/s</b><span>Index rate</span></div>
-</div>
-<div class="progress-wrap"><div id="progressBar" class="progress-bar" style="width:0%"></div></div>
-<p id="progressText" class="sub">Waiting for captures…</p><p id="eta" class="sub"></p>
-<p id="status" class="sub"></p>
-<div class="buttons library-controls">
-  <button id="clearLibrary" class="danger">Clear scraped profiles</button>
-</div>
-<p id="clearLibraryStatus" class="sub"></p>
-
-<details><summary>One-time Shortcut setup</summary><ol>
-<li>Add <b>Run JavaScript on Web Page</b> and paste the collector JavaScript from the button below.</li>
-<li>Add <b>Copy to Clipboard</b> after it.</li>
-<li>Set Copy to Clipboard to copy the <b>JavaScript Result</b>.</li>
-<li>When browsing Instagram in Safari, run the Shortcut from the Share Sheet. It only copies data; it does not contact Render.</li>
-</ol><div class="buttons"><button id="copyShortcutJs">Copy Collector JavaScript</button></div></details>
-</section>
-<section class="card"><h2>2. Paste Instagram HTML</h2>
-<p class="sub">For follower/following pages, copy the loaded page HTML from Safari and paste it here. The server extracts Instagram profile links, matches avatar URLs when available, resolves missing avatars, deduplicates them, and queues them for CLIP.</p>
-<div class="paste-actions">
-  <button id="pasteHtml">Paste HTML</button>
-  <button id="importHtml">Extract Profiles &amp; Index</button>
-  <button id="clearHtml" class="secondary">Clear</button>
-</div>
-<textarea id="htmlPayload" rows="10" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="Paste Instagram page HTML here…"></textarea>
-<p id="htmlStatus" class="sub"></p>
-<details><summary>Shortcut for HTML copy</summary><ol>
-<li>Use <b>Run JavaScript on Web Page</b>.</li>
-<li>JavaScript: <code>completion(document.documentElement.outerHTML);</code></li>
-<li>Add <b>Copy to Clipboard</b> and set it to <b>JavaScript Result</b>.</li>
-<li>Open the Instagram followers/following page in Safari, scroll until the profiles you want are loaded, run the Shortcut, then return here and paste.</li>
-</ol></details>
-</section>
-<section class="card"><h2>3. Bulk Import</h2>
-<p class="sub">Paste up to 10,000 Instagram usernames or profile URLs. One per line is easiest. You can also paste JSON exported from the scraper. If an avatar URL is included, it goes straight to CLIP; otherwise the server will try to resolve the profile image first.</p>
-<textarea id="bulkText" rows="10" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="@username&#10;https://instagram.com/anotheruser/&#10;thirduser"></textarea>
-<div class="buttons"><button id="bulkImport">Import Bulk List</button><button id="bulkClear" class="secondary">Clear</button></div>
-<p id="bulkStatus" class="sub"></p>
-</section>
-<section class="card"><h2>4. CLIP Search</h2><div class="search"><input id="q" placeholder="e.g. sunglasses, red hair, beach photo"><button id="search">Visual text search</button><button id="recent" class="secondary">Recent</button></div><p class="sub">Or search with a reference image:</p><div class="search"><input id="imageFile" type="file" accept="image/*"><button id="imageSearch">Search by image</button></div><p id="searchStatus" class="sub"></p><div id="results"></div></section>
-<section class="card"><h2>Storage status</h2><p id="storage" class="sub">Checking…</p><p class="sub">For persistence, configure Supabase in Render. Without it, Render's free filesystem can disappear on spin-down/redeploy.</p></section>
-</main><script src="/static/app.js"></script></body></html>
-
-
-<!-- Shortcut simplified endpoint: POST /api/shortcut/ingest with JSON {"payload":"<JavaScript Result>","device_id":"iphone"}. -->
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Instagram Profile Viewer</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Instagram Profile Viewer</h1>
+      <p>Phase 1: scraper → Render → persistent profile display.</p>
+    </div>
+    <div class="count"><b id="total">0</b><span>profiles</span></div>
+  </header>
+  <section class="toolbar">
+    <button id="refresh">Refresh</button>
+    <button id="clear" class="danger">Clear all profiles</button>
+    <span id="status"></span>
+  </section>
+  <section id="grid" class="grid"></section>
+  <div class="load-row"><button id="more">Load more</button></div>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>

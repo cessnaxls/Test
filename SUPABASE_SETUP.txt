@@ -1,0 +1,30 @@
+create table if not exists scraped_profiles_v2 (
+  username text primary key,
+  full_name text not null default '',
+  profile_url text not null,
+  image_url text not null default '',
+  source_url text not null default '',
+  first_seen timestamptz not null default now(),
+  last_seen timestamptz not null default now(),
+  seen_count integer not null default 1
+);
+
+create or replace function scraped_profiles_v2_touch()
+returns trigger
+language plpgsql
+as $$
+begin
+  if tg_op = 'UPDATE' then
+    new.first_seen := old.first_seen;
+    new.last_seen := now();
+    new.seen_count := old.seen_count + 1;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists scraped_profiles_v2_touch_trigger on scraped_profiles_v2;
+create trigger scraped_profiles_v2_touch_trigger
+before update on scraped_profiles_v2
+for each row execute function scraped_profiles_v2_touch();
+create index if not exists scraped_profiles_v2_last_seen_idx on scraped_profiles_v2(last_seen desc);

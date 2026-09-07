@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: instagram-profile-search
+    name: instagram-profile-viewer-v2
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
@@ -9,23 +9,5 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.7
-      - key: HF_HOME
-        value: /tmp/hf
-      - key: CLIP_ONNX_REPO
-        value: onnx-community/clip-vit-base-patch32-ONNX
-      - key: CLIP_PROCESSOR_REPO
-        value: openai/clip-vit-base-patch32
-      - key: CLIP_ONNX_FILE
-        value: onnx/model_quantized.onnx
-      - key: CLIP_INDEX_WORKERS
-        value: "2"
-      - key: CLIP_WORKER_BATCH_SIZE
-        value: "16"
-      - key: CLIP_WORKER_DOWNLOADS
-        value: "8"
-      - key: CLIP_INTRA_THREADS
-        value: "2"
-      - key: INDEX_POLL_SECONDS
-        value: "0.1"
-      - key: INGEST_MAX_BATCH
-        value: "1000"
+      - key: PROFILE_TABLE
+        value: scraped_profiles_v2
