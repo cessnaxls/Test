@@ -11,3 +11,5 @@
 #bulkText{width:100%;box-sizing:border-box;min-height:220px;border-radius:12px;padding:12px;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;resize:vertical}
 
 #htmlPayload{width:100%;box-sizing:border-box;min-height:240px;border-radius:12px;padding:12px;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;resize:vertical}
+
+.button-link{display:inline-block;text-decoration:none;padding:10px 14px;border-radius:10px;background:currentColor}.button-link{color:inherit;border:1px solid currentColor}

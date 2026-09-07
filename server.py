@@ -8,6 +8,7 @@ from PIL import Image
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from clip_engine import image_embedding, image_embeddings, text_embedding
 
@@ -15,7 +16,14 @@ BASE=Path(__file__).resolve().parent
 DB=Path('/tmp/clip_profiles.sqlite3')
 SUPA_URL=os.getenv('SUPABASE_URL','').rstrip('/')
 SUPA_KEY=os.getenv('SUPABASE_SERVICE_ROLE_KEY','')
-app=FastAPI(title='Instagram CLIP Library',version='4.0')
+app=FastAPI(title='Instagram CLIP Library',version='6.0')
+app.add_middleware(
+ CORSMiddleware,
+ allow_origins=['https://www.instagram.com','https://instagram.com'],
+ allow_credentials=False,
+ allow_methods=['GET','POST','OPTIONS'],
+ allow_headers=['*'],
+)
 app.mount('/static',StaticFiles(directory=BASE/'web'/'static'),name='static')
 
 BATCH_SIZE=max(1,int(os.getenv('CLIP_BATCH_SIZE','16')))
@@ -257,6 +265,11 @@ class BulkImport(BaseModel):
 class HtmlImport(BaseModel):
  device_id:str=Field(default='iphone',min_length=1,max_length=100)
  html:str=Field(min_length=1,max_length=15000000)
+
+class BrowserIngest(BaseModel):
+ device_id:str=Field(default='iphone',min_length=1,max_length=100)
+ records:list[dict[str,Any]]=Field(default_factory=list,max_length=500)
+ page_url:str|None=Field(default=None,max_length=2000)
 
 
 _USERNAME_RE=re.compile(r'^[A-Za-z0-9._]{1,64}$')
@@ -509,6 +522,47 @@ def html_import(req:HtmlImport):
   'captured':result.get('captured',0),
   'sample_errors':resolve_errors[:20]
  }
+
+
+@app.post('/api/browser/ingest')
+def browser_ingest(req:BrowserIngest):
+ # De-dupe this incoming batch first.
+ unique={}
+ for r in req.records:
+  u=_normalize_username(r.get('username') or r.get('profile_url'))
+  if not u: continue
+  rec=dict(r)
+  rec['username']=u
+  rec['profile_url']=str(rec.get('profile_url') or f'https://www.instagram.com/{u}/')
+  old=unique.get(u)
+  if not old or (not old.get('image_url') and rec.get('image_url')):
+   unique[u]=rec
+ records=list(unique.values())
+ if not records:
+  return {'received':0,'captured':0,'queued':0,'resolved':0,'unresolved':0}
+
+ ready=[r for r in records if r.get('image_url')]
+ missing=[r for r in records if not r.get('image_url')]
+ resolved=[]; errors=[]
+ if missing:
+  with concurrent.futures.ThreadPoolExecutor(max_workers=min(DOWNLOAD_WORKERS,16)) as pool:
+   for rec,err in pool.map(_resolve_avatar,missing):
+    if err: errors.append({'username':rec['username'],'error':err})
+    else: resolved.append(rec)
+
+ result=ingest_records(req.device_id,ready+resolved,req.page_url or 'browser_scroll')
+ return {
+  'received':len(records),
+  'captured':result.get('captured',0),
+  'queued':result.get('queued',0),
+  'resolved':len(resolved),
+  'unresolved':len(errors),
+  'sample_errors':errors[:10]
+ }
+
+@app.get('/api/browser/ping')
+def browser_ping():
+ return {'ok':True,'version':'6.0'}
 
 @app.get('/api/live/stats')
 def stats(device_id:str):
