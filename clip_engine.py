@@ -8,7 +8,7 @@ _SESSION = None
 _PROCESSOR = None
 _OUTPUTS = None
 
-REPO = os.getenv('CLIP_ONNX_REPO', 'sayantan47/clip-vit-b32-onnx')
+REPO = os.getenv('CLIP_ONNX_REPO', 'onnx-community/clip-vit-base-patch32-ONNX')
 FILE = os.getenv('CLIP_ONNX_FILE', 'onnx/model_quantized.onnx')
 
 

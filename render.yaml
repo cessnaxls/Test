@@ -12,7 +12,7 @@ services:
       - key: HF_HOME
         value: /opt/render/project/src/.hf
       - key: CLIP_ONNX_REPO
-        value: sayantan47/clip-vit-b32-onnx
+        value: onnx-community/clip-vit-base-patch32-ONNX
       - key: CLIP_ONNX_FILE
         value: onnx/model_quantized.onnx
       - key: CLIP_BATCH_SIZE

@@ -1,7 +1,7 @@
 import os
 from huggingface_hub import hf_hub_download
 from transformers import CLIPProcessor
-repo=os.getenv('CLIP_ONNX_REPO','sayantan47/clip-vit-b32-onnx')
+repo=os.getenv('CLIP_ONNX_REPO','onnx-community/clip-vit-base-patch32-ONNX')
 file=os.getenv('CLIP_ONNX_FILE','onnx/model_quantized.onnx')
 cache=os.getenv('HF_HOME','.hf')
 print('Prefetching CLIP model...')
