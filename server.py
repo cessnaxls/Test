@@ -39,6 +39,11 @@ RATE_EVENTS=collections.deque(maxlen=2000)
 LAST_ERROR=''
 PROCESSING=0
 
+REPLICATE_API_TOKEN=os.getenv('REPLICATE_API_TOKEN','').strip()
+REPLICATE_MODEL=os.getenv('REPLICATE_MODEL','negu63/tinyclip').strip()
+REPLICATE_CONCURRENCY=max(1,int(os.getenv('REPLICATE_CONCURRENCY','12')))
+REPLICATE_WAIT=max(5,int(os.getenv('REPLICATE_WAIT_SECONDS','60')))
+
 def db():
  c=sqlite3.connect(DB); c.row_factory=sqlite3.Row
  c.execute('''create table if not exists clip_profiles(device_id text,username text,full_name text,profile_url text,source_url text,original_image_url text,thumbnail_b64 text,embedding text,first_seen real,last_seen real,seen_count integer default 1,primary key(device_id,username))'''); return c
@@ -272,6 +277,70 @@ def _rate():
   span=max(now-RATE_EVENTS[0],1.0)
   return len(RATE_EVENTS)/span
 
+
+def _replicate_predict(input_payload):
+ if not REPLICATE_API_TOKEN:
+  raise RuntimeError('REPLICATE_API_TOKEN is not configured')
+ url=f'https://api.replicate.com/v1/models/{REPLICATE_MODEL}/predictions'
+ headers={
+  'Authorization':f'Token {REPLICATE_API_TOKEN}',
+  'Content-Type':'application/json',
+  'Prefer':f'wait={REPLICATE_WAIT}'
+ }
+ r=HTTP.post(url,headers=headers,json={'input':input_payload},timeout=REPLICATE_WAIT+15)
+ if not r.ok:
+  raise RuntimeError(f'Replicate {r.status_code}: {r.text[:300]}')
+ obj=r.json()
+ # Sync mode often returns output immediately. If not, poll the prediction URL.
+ if obj.get('status')=='succeeded':
+  return obj.get('output') or {}
+ get_url=(obj.get('urls') or {}).get('get')
+ deadline=time.time()+REPLICATE_WAIT+15
+ while get_url and time.time()<deadline:
+  time.sleep(0.15)
+  rr=HTTP.get(get_url,headers={'Authorization':f'Token {REPLICATE_API_TOKEN}'},timeout=20)
+  if not rr.ok: raise RuntimeError(f'Replicate poll {rr.status_code}')
+  obj=rr.json()
+  if obj.get('status')=='succeeded': return obj.get('output') or {}
+  if obj.get('status') in ('failed','canceled'):
+   raise RuntimeError(str(obj.get('error') or obj.get('status'))[:300])
+ raise RuntimeError('Replicate prediction timed out')
+
+def remote_image_embedding(data):
+ b64=base64.b64encode(data).decode('ascii')
+ out=_replicate_predict({'image_base64':b64})
+ vec=out.get('image_vector') if isinstance(out,dict) else None
+ if not vec or len(vec)!=512:
+  raise RuntimeError('TinyCLIP image embedding missing or wrong dimension')
+ a=np.asarray(vec,dtype=np.float32)
+ a=a/max(float(np.linalg.norm(a)),1e-12)
+ return a.tolist()
+
+def remote_text_embedding(text):
+ out=_replicate_predict({'text':text})
+ vec=out.get('text_vector') if isinstance(out,dict) else None
+ if not vec or len(vec)!=512:
+  raise RuntimeError('TinyCLIP text embedding missing or wrong dimension')
+ a=np.asarray(vec,dtype=np.float32)
+ a=a/max(float(np.linalg.norm(a)),1e-12)
+ return a.tolist()
+
+def _embed_many_remote(datas):
+ out=[None]*len(datas)
+ next_i=0
+ lock=threading.Lock()
+ def worker():
+  nonlocal next_i
+  while True:
+   with lock:
+    i=next_i; next_i+=1
+   if i>=len(datas): return
+   out[i]=remote_image_embedding(datas[i])
+ with concurrent.futures.ThreadPoolExecutor(max_workers=min(REPLICATE_CONCURRENCY,max(1,len(datas)))) as pool:
+  futs=[pool.submit(worker) for _ in range(min(REPLICATE_CONCURRENCY,max(1,len(datas))))]
+  for f in futs: f.result()
+ return out
+
 def index_worker():
  global PROCESSING, LAST_ERROR
  pool=concurrent.futures.ThreadPoolExecutor(max_workers=DOWNLOAD_WORKERS)
@@ -291,7 +360,7 @@ def index_worker():
     else: good_rows.append(row); datas.append(data)
    if good_rows:
     try:
-     embeddings=image_embeddings(datas)
+     embeddings=_embed_many_remote(datas) if REPLICATE_API_TOKEN else image_embeddings(datas)
      _mark_indexed(good_rows,datas,embeddings)
     except Exception as e:
      for row in good_rows: _mark_failed(row,f'CLIP batch: {str(e)[:180]}')
@@ -300,6 +369,11 @@ def index_worker():
    time.sleep(2)
   finally:
    with INDEX_LOCK: PROCESSING=0
+
+REPLICATE_API_TOKEN=os.getenv('REPLICATE_API_TOKEN','').strip()
+REPLICATE_MODEL=os.getenv('REPLICATE_MODEL','negu63/tinyclip').strip()
+REPLICATE_CONCURRENCY=max(1,int(os.getenv('REPLICATE_CONCURRENCY','12')))
+REPLICATE_WAIT=max(5,int(os.getenv('REPLICATE_WAIT_SECONDS','60')))
 
 def recover_stale_jobs():
  if not persistent(): return
@@ -510,7 +584,7 @@ def _extract_html_profiles(raw_html):
 @app.get('/',response_class=HTMLResponse)
 def home(): return (BASE/'web'/'index.html').read_text()
 @app.get('/health')
-def health(): return {'ok':True,'version':'8.0-avatar-upload','persistent':persistent(),'clip':'openai/clip-vit-base-patch32 ONNX quantized'}
+def health(): return {'ok':True,'version':'9.0-replicate','persistent':persistent(),'clip':'openai/clip-vit-base-patch32 ONNX quantized'}
 @app.get('/api/config')
 def config(): return {'persistent':persistent(),'clip_enabled':True,'supabase_configured':persistent()}
 
@@ -636,7 +710,7 @@ def browser_ingest(req:BrowserIngest):
 
 @app.get('/api/browser/ping')
 def browser_ping():
- return {'ok':True,'version':'8.0-avatar-upload'}
+ return {'ok':True,'version':'9.0-replicate'}
 
 @app.get('/api/live/stats')
 def stats(device_id:str):

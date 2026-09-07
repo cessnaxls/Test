@@ -9,21 +9,17 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.7
-      - key: HF_HOME
-        value: /tmp/hf
-      - key: CLIP_ONNX_REPO
-        value: onnx-community/clip-vit-base-patch32-ONNX
-      - key: CLIP_PROCESSOR_REPO
-        value: openai/clip-vit-base-patch32
-      - key: CLIP_ONNX_FILE
-        value: onnx/model_quantized.onnx
       - key: CLIP_BATCH_SIZE
-        value: "32"
+        value: "64"
       - key: AVATAR_DOWNLOAD_WORKERS
-        value: "32"
-      - key: CLIP_INTRA_THREADS
-        value: "4"
+        value: "16"
       - key: INDEX_POLL_SECONDS
-        value: "0.15"
+        value: "0.1"
       - key: INGEST_MAX_BATCH
         value: "1000"
+      - key: REPLICATE_MODEL
+        value: negu63/tinyclip
+      - key: REPLICATE_CONCURRENCY
+        value: "12"
+      - key: REPLICATE_WAIT_SECONDS
+        value: "60"
