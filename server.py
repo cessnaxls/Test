@@ -38,24 +38,49 @@ def require_supabase():
 
 def supa(method: str, path: str, *, params=None, payload=None, prefer=None):
     require_supabase()
+
     headers = {
         "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json",
     }
+
+    # New sb_secret_* keys are API keys, not JWTs.
+    # Legacy service_role keys are JWTs and may be sent as Bearer tokens.
+    if not SUPABASE_KEY.startswith("sb_secret_") and SUPABASE_KEY.count(".") == 2:
+        headers["Authorization"] = f"Bearer {SUPABASE_KEY}"
+
     if prefer:
         headers["Prefer"] = prefer
-    r = requests.request(
-        method,
-        f"{SUPABASE_URL}/rest/v1/{path}",
-        params=params,
-        json=payload,
-        headers=headers,
-        timeout=30,
-    )
+
+    try:
+        r = requests.request(
+            method,
+            f"{SUPABASE_URL}/rest/v1/{path}",
+            params=params,
+            json=payload,
+            headers=headers,
+            timeout=30,
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(502, f"Could not reach Supabase: {exc}") from exc
+
     if not r.ok:
-        raise HTTPException(r.status_code, f"Supabase error: {r.text[:600]}")
-    return r.json() if r.text else []
+        raise HTTPException(
+            r.status_code,
+            f"Supabase {r.status_code}: {r.text[:600]}"
+        )
+
+    if not r.text:
+        return []
+
+    try:
+        return r.json()
+    except ValueError as exc:
+        raise HTTPException(
+            502,
+            f"Supabase returned invalid JSON: {r.text[:300]}"
+        ) from exc
+
 
 def clean_username(value: Any) -> str:
     username = str(value or "").strip().lstrip("@").lower()
@@ -70,9 +95,29 @@ def home():
 def health():
     return {
         "ok": True,
-        "version": "1.0.0",
+        "version": "1.0.1",
         "supabase_configured": bool(SUPABASE_URL and SUPABASE_KEY),
         "table": TABLE,
+        "key_type": (
+            "secret"
+            if SUPABASE_KEY.startswith("sb_secret_")
+            else "legacy_jwt"
+            if SUPABASE_KEY.count(".") == 2
+            else "unknown"
+        ),
+    }
+
+@app.get("/api/debug/supabase")
+def debug_supabase():
+    rows = supa(
+        "GET",
+        TABLE,
+        params={"select": "username", "limit": "1"},
+    )
+    return {
+        "ok": True,
+        "table": TABLE,
+        "sample_rows": len(rows),
     }
 
 @app.post("/api/profiles/batch")
