@@ -13,3 +13,6 @@ button{border:1px solid #303038;border-radius:10px;padding:9px 12px;background:#
 .full-name{margin-top:3px;color:#999;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.empty{grid-column:1/-1;padding:40px 10px;text-align:center;color:#777}
 .footer-actions{display:flex;justify-content:center;padding:24px 0 30px}
 @media(max-width:560px){main{padding:12px}h1{font-size:23px}.gallery{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}.profile-card{border-radius:10px}.profile-meta{padding:7px}.username{font-size:12px}.full-name{font-size:10px}}
+
+.photo-link.broken{display:grid;place-items:center;background:#1e1e23}
+.photo-link.broken::after{content:"photo unavailable";font-size:11px;color:#777}

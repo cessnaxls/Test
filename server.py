@@ -7,7 +7,7 @@ from typing import Any
 import requests
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -132,7 +132,6 @@ def ingest_profiles(req: ProfileBatch):
             "full_name": str(raw.get("full_name") or "")[:300],
             "profile_url": str(raw.get("profile_url") or f"https://www.instagram.com/{username}/")[:1000],
             "image_url": str(raw.get("image_url") or "")[:5000],
-            "avatar_base64": str(raw.get("avatar_base64") or "")[:250000],
             "source_url": str(raw.get("source_url") or req.source_url or "")[:2000],
         }
         old = unique.get(username)
@@ -164,7 +163,7 @@ def get_profiles(
     photos_only: bool = Query(default=False),
 ):
     params = {
-        "select": "username,full_name,profile_url,image_url,avatar_base64,source_url,first_seen,last_seen,seen_count",
+        "select": "username,full_name,profile_url,image_url,source_url,first_seen,last_seen,seen_count",
         "order": "last_seen.desc",
         "limit": str(limit),
         "offset": str(offset),
@@ -183,16 +182,52 @@ def stats():
         rows = supa(
             "GET",
             TABLE,
-            params={"select": "username,image_url,avatar_base64", "limit": "1000", "offset": str(offset)},
+            params={"select": "username,image_url", "limit": "1000", "offset": str(offset)},
         )
         if not rows:
             break
         total += len(rows)
-        with_photos += sum(1 for row in rows if row.get("image_url") or row.get("avatar_base64"))
+        with_photos += sum(1 for row in rows if row.get("image_url"))
         if len(rows) < 1000:
             break
         offset += 1000
     return {"total": total, "with_photos": with_photos, "without_photos": max(total-with_photos, 0)}
+
+
+@app.get("/api/avatar")
+def avatar(url: str = Query(..., min_length=8, max_length=5000)):
+    if not (
+        url.startswith("https://")
+        and any(host in url.lower() for host in ("cdninstagram", "fbcdn", "scontent"))
+    ):
+        raise HTTPException(400, "Unsupported avatar URL")
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1",
+        "Referer": "https://www.instagram.com/",
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    try:
+        r = requests.get(url, headers=headers, timeout=20, allow_redirects=True)
+    except requests.RequestException as exc:
+        raise HTTPException(502, f"Avatar fetch failed: {exc}") from exc
+
+    if not r.ok:
+        raise HTTPException(r.status_code, f"Avatar CDN returned {r.status_code}")
+
+    content_type = r.headers.get("content-type", "")
+    if not content_type.startswith("image/"):
+        raise HTTPException(502, "Avatar URL did not return an image")
+
+    return Response(
+        content=r.content,
+        media_type=content_type,
+        headers={
+            "Cache-Control": "public, max-age=3600",
+        },
+    )
 
 @app.delete("/api/profiles")
 def clear_profiles():
