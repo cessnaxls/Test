@@ -24,7 +24,11 @@ end;
 $$;
 
 drop trigger if exists scraped_profiles_v2_touch_trigger on scraped_profiles_v2;
+
 create trigger scraped_profiles_v2_touch_trigger
 before update on scraped_profiles_v2
-for each row execute function scraped_profiles_v2_touch();
-create index if not exists scraped_profiles_v2_last_seen_idx on scraped_profiles_v2(last_seen desc);
+for each row
+execute function scraped_profiles_v2_touch();
+
+create index if not exists scraped_profiles_v2_last_seen_idx
+on scraped_profiles_v2(last_seen desc);

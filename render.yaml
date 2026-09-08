@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: instagram-profile-viewer-v2
+    name: instagram-profile-search
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
