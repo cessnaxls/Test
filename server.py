@@ -132,6 +132,7 @@ def ingest_profiles(req: ProfileBatch):
             "full_name": str(raw.get("full_name") or "")[:300],
             "profile_url": str(raw.get("profile_url") or f"https://www.instagram.com/{username}/")[:1000],
             "image_url": str(raw.get("image_url") or "")[:5000],
+            "avatar_base64": str(raw.get("avatar_base64") or "")[:250000],
             "source_url": str(raw.get("source_url") or req.source_url or "")[:2000],
         }
         old = unique.get(username)
@@ -163,7 +164,7 @@ def get_profiles(
     photos_only: bool = Query(default=False),
 ):
     params = {
-        "select": "username,full_name,profile_url,image_url,source_url,first_seen,last_seen,seen_count",
+        "select": "username,full_name,profile_url,image_url,avatar_base64,source_url,first_seen,last_seen,seen_count",
         "order": "last_seen.desc",
         "limit": str(limit),
         "offset": str(offset),
@@ -182,12 +183,12 @@ def stats():
         rows = supa(
             "GET",
             TABLE,
-            params={"select": "username,image_url", "limit": "1000", "offset": str(offset)},
+            params={"select": "username,image_url,avatar_base64", "limit": "1000", "offset": str(offset)},
         )
         if not rows:
             break
         total += len(rows)
-        with_photos += sum(1 for row in rows if row.get("image_url"))
+        with_photos += sum(1 for row in rows if row.get("image_url") or row.get("avatar_base64"))
         if len(rows) < 1000:
             break
         offset += 1000

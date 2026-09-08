@@ -6,7 +6,7 @@ function esc(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&l
 async function api(path,options={}){const r=await fetch(path,options);if(!r.ok)throw new Error(await r.text());return r.json();}
 
 function card(p){
-  const u=esc(p.username), url=esc(p.profile_url), img=esc(p.image_url||""), name=esc(p.full_name||"");
+  const u=esc(p.username), url=esc(p.profile_url), img=p.avatar_base64?`data:image/jpeg;base64,${p.avatar_base64}`:esc(p.image_url||""), name=esc(p.full_name||"");
   const visual=img
     ? `<a class="photo-link" href="${url}" target="_blank" rel="noopener"><img src="${img}" loading="lazy" decoding="async" referrerpolicy="no-referrer" alt="@${u}"></a>`
     : `<a class="photo-link placeholder" href="${url}" target="_blank" rel="noopener"><span>@${u}</span></a>`;

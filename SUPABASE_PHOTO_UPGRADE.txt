@@ -1,0 +1,2 @@
+alter table scraped_profiles_v2
+add column if not exists avatar_base64 text;
