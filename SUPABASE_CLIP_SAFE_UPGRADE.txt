@@ -1,0 +1,42 @@
+alter table scraped_profiles_v2
+add column if not exists clip_embedding text;
+
+alter table scraped_profiles_v2
+add column if not exists clip_index_status text not null default 'queued';
+
+alter table scraped_profiles_v2
+add column if not exists clip_error text;
+
+alter table scraped_profiles_v2
+add column if not exists clip_indexed_at timestamptz;
+
+update scraped_profiles_v2
+set clip_index_status = 'queued',
+    clip_error = null
+where clip_embedding is null;
+
+create index if not exists scraped_profiles_v2_clip_status_idx
+on scraped_profiles_v2(clip_index_status);
+
+create or replace function bulk_set_clip_embeddings(items jsonb)
+returns void
+language plpgsql
+security definer
+as $$
+declare
+  item jsonb;
+begin
+  for item in select * from jsonb_array_elements(items)
+  loop
+    update scraped_profiles_v2
+    set clip_embedding = item->>'clip_embedding',
+        clip_index_status = coalesce(item->>'clip_index_status', 'indexed'),
+        clip_error = item->>'clip_error',
+        clip_indexed_at = coalesce(
+          nullif(item->>'clip_indexed_at','')::timestamptz,
+          now()
+        )
+    where username = item->>'username';
+  end loop;
+end;
+$$;

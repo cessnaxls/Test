@@ -1,1 +1,1 @@
-print('CLIP disabled in stable rollback.')
+print('CLIP loads only after Start CLIP Indexing is pressed.')

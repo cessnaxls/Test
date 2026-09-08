@@ -56,7 +56,7 @@ def _load():
         options = ort.SessionOptions()
         options.intra_op_num_threads = max(
             1,
-            int(os.getenv("CLIP_INTRA_THREADS", "2")),
+            int(os.getenv("CLIP_INTRA_THREADS", "4")),
         )
         options.inter_op_num_threads = 1
         options.graph_optimization_level = (
@@ -69,7 +69,7 @@ def _load():
             providers=["CPUExecutionProvider"],
         )
 
-        _OUTPUT_NAMES = [output.name for output in _SESSION.get_outputs()]
+        _OUTPUT_NAMES = [o.name for o in _SESSION.get_outputs()]
 
 
 def _run(images, texts):
@@ -77,19 +77,19 @@ def _run(images, texts):
 
     processed = _PROCESSOR(
         text=texts,
-        images=[image.convert("RGB") for image in images],
+        images=[img.convert("RGB") for img in images],
         return_tensors="np",
         padding=True,
     )
 
-    session_inputs = {item.name: item for item in _SESSION.get_inputs()}
+    valid = {i.name: i for i in _SESSION.get_inputs()}
     feed = {}
 
     for name, value in processed.items():
-        if name not in session_inputs:
+        if name not in valid:
             continue
 
-        expected = session_inputs[name].type
+        expected = valid[name].type
 
         if "int64" in expected:
             value = value.astype(np.int64)
@@ -99,14 +99,12 @@ def _run(images, texts):
         feed[name] = value
 
     outputs = _SESSION.run(None, feed)
-
     return dict(zip(_OUTPUT_NAMES, outputs))
 
 
-def _embedding_matrix(outputs, kind):
+def _matrix(outputs, kind):
     names = [
-        name
-        for name in outputs
+        name for name in outputs
         if kind in name.lower() and "embed" in name.lower()
     ]
 
@@ -119,15 +117,11 @@ def _embedding_matrix(outputs, kind):
             and value.shape[-1] == 512
         ]
 
-        if kind == "text":
-            names = candidates[:1]
-        else:
-            names = candidates[-1:]
+        names = candidates[:1] if kind == "text" else candidates[-1:]
 
     if not names:
         raise RuntimeError(
-            f"Could not identify {kind} CLIP embedding output. "
-            f"Outputs: {list(outputs)}"
+            f"Could not identify {kind} CLIP embedding output: {list(outputs)}"
         )
 
     matrix = np.asarray(outputs[names[0]], dtype=np.float32)
@@ -145,24 +139,11 @@ def image_embeddings(items: list[bytes]):
         for data in items
     ]
 
-    outputs = _run(
-        images,
-        ["a photo"] * len(images),
-    )
-
-    return _embedding_matrix(outputs, "image").tolist()
-
-
-def image_embedding(data: bytes):
-    return image_embeddings([data])[0]
+    outputs = _run(images, ["a photo"] * len(images))
+    return _matrix(outputs, "image").tolist()
 
 
 def text_embedding(text: str):
     blank = Image.new("RGB", (224, 224), "white")
-
-    outputs = _run(
-        [blank],
-        [text],
-    )
-
-    return _embedding_matrix(outputs, "text")[0].tolist()
+    outputs = _run([blank], [text])
+    return _matrix(outputs, "text")[0].tolist()
