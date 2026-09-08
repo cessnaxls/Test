@@ -1,4 +1,10 @@
-const $=id=>document.getElementById(id);
+document.addEventListener("DOMContentLoaded", () => {
+const $ = id => document.getElementById(id);
+function need(id){
+  const el = $(id);
+  if(!el) throw new Error(`UI element #${id} is missing. Replace index.html and app.js together.`);
+  return el;
+}
 const PAGE_SIZE=250;
 let offset=0, loading=false, loadedProfiles=[];
 
@@ -14,50 +20,52 @@ function card(p){
 }
 
 function renderVisible(){
-  const q=$("search").value.trim().toLowerCase();
+  const q=need("search").value.trim().toLowerCase();
   const rows=q?loadedProfiles.filter(p=>String(p.username||"").toLowerCase().includes(q)||String(p.full_name||"").toLowerCase().includes(q)):loadedProfiles;
-  $("gallery").innerHTML=rows.length?rows.map(card).join(""):`<div class="empty">No profiles loaded yet.</div>`;
+  need("gallery").innerHTML=rows.length?rows.map(card).join(""):`<div class="empty">No profiles loaded yet.</div>`;
 }
 
 async function refreshStats(){
   try{
     const d=await api("/api/stats");
-    $("total").textContent=Number(d.total||0).toLocaleString();
-    $("photos").textContent=Number(d.with_photos||0).toLocaleString();
-  }catch(e){$("status").textContent=e.message;}
+    need("total").textContent=Number(d.total||0).toLocaleString();
+    need("photos").textContent=Number(d.with_photos||0).toLocaleString();
+  }catch(e){need("status").textContent=e.message;}
 }
 
 async function loadProfiles(reset=false){
   if(loading)return;
   loading=true;
   try{
-    if(reset){offset=0;loadedProfiles=[];$("gallery").innerHTML="";}
-    const photosOnly=$("photosOnly").checked?"true":"false";
+    if(reset){offset=0;loadedProfiles=[];need("gallery").innerHTML="";}
+    const photosOnly=need("photosOnly").checked?"true":"false";
     const d=await api(`/api/profiles?limit=${PAGE_SIZE}&offset=${offset}&photos_only=${photosOnly}`);
     const rows=d.profiles||[];
     loadedProfiles.push(...rows);
     offset+=rows.length;
     renderVisible();
-    $("more").disabled=rows.length<PAGE_SIZE;
-    $("status").textContent=`${loadedProfiles.length.toLocaleString()} profiles loaded into this page`;
+    need("more").disabled=rows.length<PAGE_SIZE;
+    need("status").textContent=`${loadedProfiles.length.toLocaleString()} profiles loaded into this page`;
     await refreshStats();
-  }catch(e){$("status").textContent=e.message;}
+  }catch(e){need("status").textContent=e.message;}
   finally{loading=false;}
 }
 
-$("refresh").onclick=()=>loadProfiles(true);
-$("more").onclick=()=>loadProfiles(false);
-$("photosOnly").onchange=()=>loadProfiles(true);
-$("search").oninput=renderVisible;
-$("clear").onclick=async()=>{
+need("refresh").onclick=()=>loadProfiles(true);
+need("more").onclick=()=>loadProfiles(false);
+need("photosOnly").onchange=()=>loadProfiles(true);
+need("search").oninput=renderVisible;
+need("clear").onclick=async()=>{
   if(!confirm("Delete every scraped profile from the gallery? This cannot be undone."))return;
-  $("status").textContent="Clearing profiles…";
+  need("status").textContent="Clearing profiles…";
   try{
     await api("/api/profiles",{method:"DELETE"});
     loadedProfiles=[];offset=0;renderVisible();
-    $("total").textContent="0";$("photos").textContent="0";$("status").textContent="Gallery cleared.";
-  }catch(e){$("status").textContent=e.message;}
+    need("total").textContent="0";need("photos").textContent="0";need("status").textContent="Gallery cleared.";
+  }catch(e){need("status").textContent=e.message;}
 };
 
 loadProfiles(true);
 setInterval(refreshStats,2500);
+
+});
