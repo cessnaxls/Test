@@ -1,0 +1,13 @@
+FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+
+WORKDIR /app
+
+COPY gpu_requirements.txt .
+RUN pip install --no-cache-dir -r gpu_requirements.txt
+
+COPY gpu_worker.py .
+
+ENV PORT=8000
+EXPOSE 8000
+
+CMD ["sh", "-c", "uvicorn gpu_worker:app --host 0.0.0.0 --port ${PORT:-8000}"]

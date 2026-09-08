@@ -21,10 +21,12 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 TABLE = os.getenv("PROFILE_TABLE", "scraped_profiles_v2")
 
-CLIP_INDEX_WORKERS = max(1, int(os.getenv("CLIP_INDEX_WORKERS", "2")))
-CLIP_BATCH_SIZE = max(1, int(os.getenv("CLIP_BATCH_SIZE", "12")))
-CLIP_DOWNLOAD_WORKERS = max(1, int(os.getenv("CLIP_DOWNLOAD_WORKERS", "8")))
-CLIP_POLL_SECONDS = max(0.1, float(os.getenv("CLIP_POLL_SECONDS", "0.5")))
+GPU_WORKER_URL = os.getenv("GPU_WORKER_URL", "").rstrip("/")
+GPU_WORKER_TOKEN = os.getenv("GPU_WORKER_TOKEN", "")
+CLIP_INDEX_WORKERS = max(1, int(os.getenv("CLIP_INDEX_WORKERS", "12")))
+CLIP_BATCH_SIZE = max(1, int(os.getenv("CLIP_BATCH_SIZE", "64")))
+CLIP_POLL_SECONDS = max(0.05, float(os.getenv("CLIP_POLL_SECONDS", "0.15")))
+GPU_TIMEOUT = max(10, int(os.getenv("GPU_TIMEOUT_SECONDS", "90")))
 
 app = FastAPI(title="Instagram Profile Gallery + CLIP", version="2.0.0")
 app.add_middleware(
@@ -41,6 +43,7 @@ CLAIM_LOCK = threading.Lock()
 STATE_LOCK = threading.Lock()
 CLIP_PROCESSING = 0
 CLIP_LAST_ERROR = ""
+GPU_LAST_RATE = 0.0
 
 
 class ProfileBatch(BaseModel):
@@ -95,32 +98,18 @@ def clean_username(value: Any) -> str:
     return username if USERNAME_RE.fullmatch(username) else ""
 
 
-def fetch_avatar_bytes(url: str) -> bytes:
-    if not url:
-        raise ValueError("missing image_url")
-    headers = {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1",
-        "Referer": "https://www.instagram.com/",
-        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
-    r = requests.get(url, headers=headers, timeout=20, allow_redirects=True)
-    r.raise_for_status()
-    if not r.headers.get("content-type", "").startswith("image/"):
-        raise ValueError("avatar URL did not return an image")
-    if len(r.content) > 8_000_000:
-        raise ValueError("avatar image too large")
-    return r.content
-
-
-def clip_mark(username: str, **fields):
-    supa(
-        "PATCH",
-        TABLE,
-        params={"username": f"eq.{username}"},
-        payload=fields,
-        prefer="return=minimal",
-    )
+def clip_mark_many(usernames: list[str], **fields):
+    if not usernames:
+        return
+    for i in range(0, len(usernames), 100):
+        chunk = usernames[i:i+100]
+        supa(
+            "PATCH",
+            TABLE,
+            params={"username": f"in.({','.join(chunk)})"},
+            payload=fields,
+            prefer="return=minimal",
+        )
 
 
 def clip_pending(limit: int):
@@ -137,27 +126,69 @@ def clip_pending(limit: int):
     )
 
 
-def load_row_avatar(row):
-    try:
-        return row, fetch_avatar_bytes(row.get("image_url") or ""), None
-    except Exception as exc:
-        return row, None, str(exc)[:280]
+def gpu_headers():
+    headers = {"Content-Type": "application/json"}
+    if GPU_WORKER_TOKEN:
+        headers["Authorization"] = f"Bearer {GPU_WORKER_TOKEN}"
+    return headers
+
+
+def gpu_embed_images(rows: list[dict[str, Any]]):
+    if not GPU_WORKER_URL:
+        raise RuntimeError("GPU_WORKER_URL is not configured")
+
+    payload = {
+        "items": [
+            {"username": row["username"], "image_url": row["image_url"]}
+            for row in rows
+        ]
+    }
+
+    r = requests.post(
+        f"{GPU_WORKER_URL}/embed/images",
+        headers=gpu_headers(),
+        json=payload,
+        timeout=GPU_TIMEOUT,
+    )
+
+    if not r.ok:
+        raise RuntimeError(f"GPU worker {r.status_code}: {r.text[:500]}")
+
+    return r.json()
+
+
+def gpu_embed_text(text: str):
+    if not GPU_WORKER_URL:
+        raise RuntimeError("GPU_WORKER_URL is not configured")
+
+    r = requests.post(
+        f"{GPU_WORKER_URL}/embed/text",
+        headers=gpu_headers(),
+        json={"text": text},
+        timeout=GPU_TIMEOUT,
+    )
+
+    if not r.ok:
+        raise RuntimeError(f"GPU worker {r.status_code}: {r.text[:500]}")
+
+    data = r.json()
+    vector = data.get("embedding")
+    if not vector:
+        raise RuntimeError("GPU worker returned no text embedding")
+    return vector
 
 
 def clip_worker(worker_id: int):
-    global CLIP_PROCESSING, CLIP_LAST_ERROR
-    from clip_engine import image_embeddings
-
-    pool = concurrent.futures.ThreadPoolExecutor(max_workers=CLIP_DOWNLOAD_WORKERS)
+    global CLIP_PROCESSING, CLIP_LAST_ERROR, GPU_LAST_RATE
 
     while True:
         rows = []
         try:
             with CLAIM_LOCK:
                 rows = clip_pending(CLIP_BATCH_SIZE)
-                for row in rows:
-                    clip_mark(
-                        row["username"],
+                if rows:
+                    clip_mark_many(
+                        [row["username"] for row in rows],
                         clip_index_status="indexing",
                         clip_error=None,
                     )
@@ -169,51 +200,85 @@ def clip_worker(worker_id: int):
             with STATE_LOCK:
                 CLIP_PROCESSING += len(rows)
 
-            loaded = list(pool.map(load_row_avatar, rows))
-            good_rows = []
-            image_bytes = []
-
-            for row, data, error in loaded:
-                if error or data is None:
-                    clip_mark(
-                        row["username"],
-                        clip_index_status="failed",
-                        clip_error=error or "avatar fetch failed",
-                    )
-                else:
-                    good_rows.append(row)
-                    image_bytes.append(data)
-
-            if not good_rows:
-                continue
-
             try:
-                vectors = image_embeddings(image_bytes)
+                result = gpu_embed_images(rows)
             except Exception as exc:
-                message = f"CLIP worker {worker_id}: {str(exc)[:240]}"
+                message = f"GPU worker {worker_id}: {str(exc)[:300]}"
                 CLIP_LAST_ERROR = message
-                for row in good_rows:
-                    clip_mark(
-                        row["username"],
-                        clip_index_status="failed",
-                        clip_error=message,
-                    )
+                clip_mark_many(
+                    [row["username"] for row in rows],
+                    clip_index_status="queued",
+                    clip_error=message,
+                )
+                time.sleep(0.5)
                 continue
 
+            embeddings = result.get("embeddings") or []
+            failures = result.get("failures") or []
+            try:
+                GPU_LAST_RATE = float(result.get("images_per_second") or GPU_LAST_RATE or 0.0)
+            except Exception:
+                pass
             now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
-            for row, vector in zip(good_rows, vectors):
-                clip_mark(
-                    row["username"],
-                    clip_embedding=json.dumps(vector, separators=(",", ":")),
-                    clip_index_status="indexed",
-                    clip_error=None,
-                    clip_indexed_at=now,
+            indexed_rows = []
+            for item in embeddings:
+                username = clean_username(item.get("username"))
+                vector = item.get("embedding")
+                if not username or not vector:
+                    continue
+                indexed_rows.append({
+                    "username": username,
+                    "clip_embedding": json.dumps(vector, separators=(",", ":")),
+                    "clip_index_status": "indexed",
+                    "clip_error": None,
+                    "clip_indexed_at": now,
+                })
+
+            # One RPC call updates the entire returned embedding batch.
+            if indexed_rows:
+                supa(
+                    "POST",
+                    "rpc/bulk_set_clip_embeddings",
+                    payload={"items": indexed_rows},
+                    prefer="return=minimal",
+                )
+
+            for failure in failures:
+                username = clean_username(failure.get("username"))
+                if username:
+                    clip_mark_many(
+                        [username],
+                        clip_index_status="failed",
+                        clip_error=str(failure.get("error") or "GPU download/index failed")[:300],
+                    )
+
+            returned = {item.get("username") for item in embeddings}
+            returned.update(item.get("username") for item in failures)
+
+            missing = [
+                row["username"] for row in rows
+                if row["username"] not in returned
+            ]
+            if missing:
+                clip_mark_many(
+                    missing,
+                    clip_index_status="queued",
+                    clip_error="GPU response omitted profile; retrying",
                 )
 
         except Exception as exc:
-            CLIP_LAST_ERROR = f"worker {worker_id}: {str(exc)[:280]}"
-            time.sleep(1)
+            CLIP_LAST_ERROR = f"coordinator {worker_id}: {str(exc)[:300]}"
+            if rows:
+                try:
+                    clip_mark_many(
+                        [row["username"] for row in rows],
+                        clip_index_status="queued",
+                        clip_error=CLIP_LAST_ERROR,
+                    )
+                except Exception:
+                    pass
+            time.sleep(0.5)
         finally:
             if rows:
                 with STATE_LOCK:
@@ -255,10 +320,11 @@ def home():
 def health():
     return {
         "ok": True,
-        "version": "2.0.0",
+        "version": "3.0.0-gpu-pipeline",
         "supabase_configured": bool(SUPABASE_URL and SUPABASE_KEY),
         "table": TABLE,
         "clip_workers": CLIP_INDEX_WORKERS,
+        "gpu_worker_configured": bool(GPU_WORKER_URL),
     }
 
 
@@ -427,6 +493,7 @@ def clip_stats():
         "processing": processing,
         "workers": CLIP_INDEX_WORKERS,
         "last_error": last_error,
+        "gpu_images_per_second": round(GPU_LAST_RATE, 2),
     }
 
 
@@ -447,14 +514,26 @@ def clip_reindex():
     return {"ok": True}
 
 
+@app.get("/api/gpu/health")
+def gpu_health():
+    if not GPU_WORKER_URL:
+        raise HTTPException(503, "GPU_WORKER_URL is not configured")
+    r = requests.get(
+        f"{GPU_WORKER_URL}/health",
+        headers=gpu_headers(),
+        timeout=15,
+    )
+    if not r.ok:
+        raise HTTPException(r.status_code, f"GPU health {r.status_code}: {r.text[:300]}")
+    return r.json()
+
+
 @app.get("/api/clip/search/text")
 def clip_search_text(
     q: str = Query(..., min_length=1, max_length=500),
     limit: int = Query(default=10000, ge=1, le=10000),
 ):
-    from clip_engine import text_embedding
-
-    query = np.asarray(text_embedding(q.strip()), dtype=np.float32)
+    query = np.asarray(gpu_embed_text(q.strip()), dtype=np.float32)
     qnorm = float(np.linalg.norm(query))
     if qnorm <= 0:
         raise HTTPException(500, "CLIP produced an empty text embedding")

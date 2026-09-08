@@ -1,0 +1,6 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+httpx[http2]>=0.28
+Pillow>=10.4
+transformers>=4.51,<6
+torch>=2.5
