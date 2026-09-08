@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import os
 import re
+import io
+import json
 from typing import Any
 
+import numpy as np
+
 import requests
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -228,6 +232,107 @@ def avatar(url: str = Query(..., min_length=8, max_length=5000)):
             "Cache-Control": "public, max-age=3600",
         },
     )
+
+
+@app.post("/api/search/image")
+async def search_by_image(
+    image: UploadFile = File(...),
+    limit: int = Query(default=10000, ge=1, le=10000),
+):
+    content_type = (image.content_type or "").lower()
+    if not content_type.startswith("image/"):
+        raise HTTPException(400, "Upload an image file.")
+
+    data = await image.read()
+    if not data:
+        raise HTTPException(400, "Image is empty.")
+    if len(data) > 12_000_000:
+        raise HTTPException(413, "Image is too large.")
+
+    # Heavy CLIP import happens only when an image search is actually requested.
+    try:
+        from clip_engine import image_embedding
+        query = np.asarray(image_embedding(data), dtype=np.float32)
+    except Exception as exc:
+        raise HTTPException(503, f"CLIP image search is unavailable: {str(exc)[:300]}") from exc
+
+    query /= max(float(np.linalg.norm(query)), 1e-12)
+
+    scored = []
+    offset = 0
+    page = 500
+
+    while True:
+        rows = supa(
+            "GET",
+            TABLE,
+            params={
+                "select": "username,full_name,profile_url,image_url,source_url,seen_count,clip_embedding",
+                "clip_embedding": "not.is.null",
+                "limit": str(page),
+                "offset": str(offset),
+            },
+        )
+
+        if not rows:
+            break
+
+        for row in rows:
+            raw = row.pop("clip_embedding", None)
+            if not raw:
+                continue
+
+            try:
+                vector = np.asarray(json.loads(raw), dtype=np.float32)
+            except Exception:
+                continue
+
+            if vector.ndim != 1 or vector.size != query.size:
+                continue
+
+            vector /= max(float(np.linalg.norm(vector)), 1e-12)
+            row["score"] = float(np.dot(query, vector))
+            scored.append(row)
+
+        if len(rows) < page:
+            break
+
+        offset += page
+
+    scored.sort(key=lambda row: row["score"], reverse=True)
+
+    return {
+        "indexed_searched": len(scored),
+        "profiles": scored[:limit],
+    }
+
+
+@app.get("/api/search/status")
+def image_search_status():
+    indexed = 0
+    offset = 0
+
+    while True:
+        rows = supa(
+            "GET",
+            TABLE,
+            params={
+                "select": "username",
+                "clip_embedding": "not.is.null",
+                "limit": "1000",
+                "offset": str(offset),
+            },
+        )
+
+        indexed += len(rows)
+
+        if len(rows) < 1000:
+            break
+
+        offset += 1000
+
+    return {"indexed": indexed}
+
 
 @app.delete("/api/profiles")
 def clear_profiles():

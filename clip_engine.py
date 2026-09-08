@@ -53,19 +53,17 @@ def _load():
             cache_dir=cache,
         )
 
-        options = ort.SessionOptions()
-        options.intra_op_num_threads = max(
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = max(
             1,
-            int(os.getenv("CLIP_INTRA_THREADS", "4")),
+            int(os.getenv("CLIP_INTRA_THREADS", "2")),
         )
-        options.inter_op_num_threads = 1
-        options.graph_optimization_level = (
-            ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        )
+        opts.inter_op_num_threads = 1
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
         _SESSION = ort.InferenceSession(
             model_path,
-            sess_options=options,
+            sess_options=opts,
             providers=["CPUExecutionProvider"],
         )
 
@@ -75,7 +73,7 @@ def _load():
 def _run(images, texts):
     _load()
 
-    processed = _PROCESSOR(
+    inputs = _PROCESSOR(
         text=texts,
         images=[img.convert("RGB") for img in images],
         return_tensors="np",
@@ -85,12 +83,11 @@ def _run(images, texts):
     valid = {i.name: i for i in _SESSION.get_inputs()}
     feed = {}
 
-    for name, value in processed.items():
+    for name, value in inputs.items():
         if name not in valid:
             continue
 
         expected = valid[name].type
-
         if "int64" in expected:
             value = value.astype(np.int64)
         elif "float" in expected:
@@ -102,48 +99,29 @@ def _run(images, texts):
     return dict(zip(_OUTPUT_NAMES, outputs))
 
 
-def _matrix(outputs, kind):
+def _image_matrix(outputs):
     names = [
         name for name in outputs
-        if kind in name.lower() and "embed" in name.lower()
+        if "image" in name.lower() and "embed" in name.lower()
     ]
 
     if not names:
-        candidates = [
-            name
-            for name, value in outputs.items()
+        names = [
+            name for name, value in outputs.items()
             if hasattr(value, "shape")
             and len(value.shape) == 2
             and value.shape[-1] == 512
-        ]
-
-        names = candidates[:1] if kind == "text" else candidates[-1:]
+        ][-1:]
 
     if not names:
-        raise RuntimeError(
-            f"Could not identify {kind} CLIP embedding output: {list(outputs)}"
-        )
+        raise RuntimeError(f"Image embedding output not found: {list(outputs)}")
 
     matrix = np.asarray(outputs[names[0]], dtype=np.float32)
-    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
-
-    return matrix / np.maximum(norms, 1e-12)
-
-
-def image_embeddings(items: list[bytes]):
-    if not items:
-        return []
-
-    images = [
-        Image.open(io.BytesIO(data)).convert("RGB")
-        for data in items
-    ]
-
-    outputs = _run(images, ["a photo"] * len(images))
-    return _matrix(outputs, "image").tolist()
+    matrix /= np.maximum(np.linalg.norm(matrix, axis=1, keepdims=True), 1e-12)
+    return matrix
 
 
-def text_embedding(text: str):
-    blank = Image.new("RGB", (224, 224), "white")
-    outputs = _run([blank], [text])
-    return _matrix(outputs, "text")[0].tolist()
+def image_embedding(data: bytes):
+    image = Image.open(io.BytesIO(data)).convert("RGB")
+    outputs = _run([image], ["a photo"])
+    return _image_matrix(outputs)[0].tolist()

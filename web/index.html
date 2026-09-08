@@ -1,27 +1,47 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>Instagram Profile Gallery</title>
-  <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/app.css?v=image-search-v1">
 </head>
 <body>
 <main>
   <header class="top">
     <div>
       <h1>Instagram Profile Gallery</h1>
-      <p>Your JavaScript scraper feeds this gallery directly.</p>
+      <p>Scraped profile photos with image similarity search.</p>
     </div>
-    <div class="header-actions"><button id="themeToggle" class="secondary">Dark theme</button><div class="stats">
-      <div><b id="total">0</b><span>profiles</span></div>
-      <div><b id="photos">0</b><span>photos</span></div>
-    </div></div>
+    <div class="header-actions">
+      <button id="themeToggle" class="secondary">Dark theme</button>
+      <div class="stats">
+        <div><b id="total">0</b><span>profiles</span></div>
+        <div><b id="photos">0</b><span>photos</span></div>
+        <div><b id="indexed">0</b><span>searchable</span></div>
+      </div>
+    </div>
   </header>
 
+  <section class="image-search-panel">
+    <div class="image-search-row">
+      <input id="queryImage" type="file" accept="image/*">
+      <button id="imageSearch">Find similar photos</button>
+      <select id="scoreSort">
+        <option value="desc">Most similar first</option>
+        <option value="asc">Least similar first</option>
+      </select>
+      <button id="showRecent" class="secondary">Recent</button>
+    </div>
+    <div id="imageSearchStatus" class="status">Choose an image to search the indexed profile photos.</div>
+  </section>
+
   <section class="controls">
-    <input id="search" type="search" placeholder="Filter loaded usernames…">
-    <label class="toggle"><input id="photosOnly" type="checkbox" checked><span>Photos only</span></label>
+    <input id="filter" type="search" placeholder="Filter visible usernames…">
+    <label class="toggle">
+      <input id="photosOnly" type="checkbox" checked>
+      <span>Photos only</span>
+    </label>
     <button id="refresh">Refresh</button>
     <button id="clear" class="danger">Clear all</button>
   </section>
@@ -30,6 +50,7 @@
   <section id="gallery" class="gallery"></section>
   <div class="footer-actions"><button id="more">Load more</button></div>
 </main>
-<script src="/static/gallery-photo-v3.js?v=stable-light-1"></script>
+
+<script src="/static/gallery-image-search-v1.js?v=20260908-1"></script>
 </body>
 </html>
