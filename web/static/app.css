@@ -16,3 +16,17 @@ button{border:1px solid #303038;border-radius:10px;padding:9px 12px;background:#
 
 .photo-link.broken{display:grid;place-items:center;background:#1e1e23}
 .photo-link.broken::after{content:"photo unavailable";font-size:11px;color:#777}
+
+.clip-panel{margin:0 0 14px;padding:12px;border:1px solid #28282f;background:#131317;border-radius:14px}
+.clip-search-row{display:flex;gap:8px;flex-wrap:wrap}
+.clip-search-row input{flex:1 1 300px;min-width:0;border:1px solid #303038;background:#0d0d10;color:#fff;border-radius:11px;padding:11px 12px;font-size:15px}
+button.secondary{background:#202026;color:#eee;border-color:#36363e}
+.clip-progress{margin-top:12px}
+.clip-progress-track{height:10px;background:#25252b;border-radius:999px;overflow:hidden}
+.clip-progress-bar{height:100%;width:0;background:#f4f4f6;transition:width .25s ease}
+#clipProgressText,#clipStatus{font-size:12px;color:#aaa;margin-top:6px}
+.clip-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:9px}
+.photo-link{position:relative}
+.score{position:absolute;left:6px;bottom:6px;padding:4px 6px;border-radius:7px;background:rgba(0,0,0,.76);color:#fff;font-size:10px;font-weight:700}
+
+.score-sort{border:1px solid #303038;background:#202026;color:#eee;border-radius:10px;padding:9px 10px;font-size:12px}
