@@ -28,6 +28,9 @@ CLIP_DOWNLOAD_WORKERS = max(4, int(os.getenv("CLIP_DOWNLOAD_WORKERS", "32")))
 CLIP_READY_QUEUE = max(CLIP_INFER_BATCH * 2, int(os.getenv("CLIP_READY_QUEUE", "256")))
 CLIP_POLL_SECONDS = max(0.05, float(os.getenv("CLIP_POLL_SECONDS", "0.10")))
 CLIP_TARGET_RATE = max(1.0, float(os.getenv("CLIP_TARGET_RATE", "10.0")))
+CLIP_START_DELAY = max(5, int(os.getenv("CLIP_START_DELAY_SECONDS", "20")))
+CLIP_ENABLED = os.getenv("CLIP_ENABLED", "1").strip().lower() not in ("0","false","no")
+PIPELINE_STARTED = False
 
 app = FastAPI(title="Instagram Profile Gallery + CLIP", version="2.0.0")
 app.add_middleware(
@@ -101,6 +104,38 @@ def clean_username(value: Any) -> str:
     username = str(value or "").strip().lstrip("@").lower()
     return username if USERNAME_RE.fullmatch(username) else ""
 
+
+def _memory_limit_mb():
+    candidates = [
+        "/sys/fs/cgroup/memory.max",
+        "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+    ]
+    for path in candidates:
+        try:
+            raw = open(path, "r", encoding="utf-8").read().strip()
+            if raw and raw != "max":
+                value = int(raw)
+                if value > 0 and value < 10**15:
+                    return value / (1024 * 1024)
+        except Exception:
+            pass
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) / 1024
+    except Exception:
+        pass
+    return 512.0
+
+MEMORY_LIMIT_MB = _memory_limit_mb()
+
+if MEMORY_LIMIT_MB <= 650:
+    EFFECTIVE_INFER_BATCH = min(CLIP_INFER_BATCH, 8)
+elif MEMORY_LIMIT_MB <= 1100:
+    EFFECTIVE_INFER_BATCH = min(CLIP_INFER_BATCH, 16)
+else:
+    EFFECTIVE_INFER_BATCH = CLIP_INFER_BATCH
 
 HTTP = requests.Session()
 HTTP.headers.update({
@@ -289,7 +324,7 @@ def bulk_write_embeddings(rows, vectors):
 def infer_loop():
     global CLIP_PROCESSING, CLIP_LAST_ERROR, CLIP_RATE_EVENTS
 
-    from clip_engine import image_embeddings
+    image_embeddings = None
 
     while True:
         batch_rows = []
@@ -303,7 +338,7 @@ def infer_loop():
 
             deadline = time.perf_counter() + 0.025
 
-            while len(batch_rows) < CLIP_INFER_BATCH:
+            while len(batch_rows) < EFFECTIVE_INFER_BATCH:
                 timeout = max(0.0, deadline - time.perf_counter())
 
                 if timeout <= 0:
@@ -321,6 +356,10 @@ def infer_loop():
 
             started = time.perf_counter()
 
+            if image_embeddings is None:
+                from clip_engine import image_embeddings as _image_embeddings
+                image_embeddings = _image_embeddings
+
             vectors = image_embeddings(batch_data)
 
             bulk_write_embeddings(batch_rows, vectors)
@@ -336,7 +375,7 @@ def infer_loop():
 
             # If inference itself is slow, keep full batches flowing;
             # the queue/downloader stages will remain overlapped.
-            if len(batch_rows) / elapsed < CLIP_TARGET_RATE and READY_QUEUE.qsize() < CLIP_INFER_BATCH:
+            if len(batch_rows) / elapsed < CLIP_TARGET_RATE and READY_QUEUE.qsize() < EFFECTIVE_INFER_BATCH:
                 time.sleep(0)
 
         except queue.Empty:
@@ -388,22 +427,40 @@ def recover_indexing_rows():
         pass
 
 
+def start_pipeline_after_delay():
+    global PIPELINE_STARTED, CLIP_LAST_ERROR
+
+    if not CLIP_ENABLED:
+        return
+
+    time.sleep(CLIP_START_DELAY)
+
+    try:
+        recover_indexing_rows()
+
+        threading.Thread(
+            target=claim_and_download_loop,
+            name="clip-download-pipeline",
+            daemon=True,
+        ).start()
+
+        threading.Thread(
+            target=infer_loop,
+            name="clip-inference-pipeline",
+            daemon=True,
+        ).start()
+
+        PIPELINE_STARTED = True
+    except Exception as exc:
+        CLIP_LAST_ERROR = f"pipeline startup: {str(exc)[:280]}"
+
 @app.on_event("startup")
 def startup():
-    recover_indexing_rows()
-
     threading.Thread(
-        target=claim_and_download_loop,
-        name="clip-download-pipeline",
+        target=start_pipeline_after_delay,
+        name="clip-delayed-start",
         daemon=True,
     ).start()
-
-    threading.Thread(
-        target=infer_loop,
-        name="clip-inference-pipeline",
-        daemon=True,
-    ).start()
-
 
 @app.get("/", response_class=HTMLResponse)
 def home():
@@ -419,7 +476,11 @@ def health():
         "supabase_configured": bool(SUPABASE_URL and SUPABASE_KEY),
         "table": TABLE,
         "clip_download_workers": CLIP_DOWNLOAD_WORKERS,
-        "clip_infer_batch": CLIP_INFER_BATCH,
+        "clip_infer_batch_configured": CLIP_INFER_BATCH,
+        "clip_infer_batch_effective": EFFECTIVE_INFER_BATCH,
+        "memory_limit_mb": round(MEMORY_LIMIT_MB, 1),
+        "clip_pipeline_started": PIPELINE_STARTED,
+        "clip_enabled": CLIP_ENABLED,
     }
 
 
@@ -595,6 +656,8 @@ def clip_stats():
         "downloaded": downloaded,
         "download_failed": download_failed,
         "images_per_second": round(clip_rate(), 2),
+        "pipeline_started": PIPELINE_STARTED,
+        "effective_batch": EFFECTIVE_INFER_BATCH,
         "last_error": last_error,
     }
 
