@@ -1,73 +1,35 @@
 <!doctype html>
-<html lang="en" data-theme="light">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <title>Instagram Profile Gallery + CLIP</title>
-  <link rel="stylesheet" href="/static/app.css?v=clip-safe-light-v1">
+  <title>Instagram Profile Gallery</title>
+  <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
 <main>
   <header class="top">
     <div>
       <h1>Instagram Profile Gallery</h1>
-      <p>Scraped profile photos with textual CLIP similarity search.</p>
+      <p>Your JavaScript scraper feeds this gallery directly.</p>
     </div>
-
-    <div class="header-actions">
-      <button id="themeToggle" class="secondary">Dark theme</button>
-      <div class="stats">
-        <div><b id="total">0</b><span>profiles</span></div>
-        <div><b id="photos">0</b><span>photos</span></div>
-        <div><b id="clipIndexed">0</b><span>CLIP indexed</span></div>
-      </div>
-    </div>
+    <div class="header-actions"><button id="themeToggle" class="secondary">Dark theme</button><div class="stats">
+      <div><b id="total">0</b><span>profiles</span></div>
+      <div><b id="photos">0</b><span>photos</span></div>
+    </div></div>
   </header>
 
-  <section class="clip-panel">
-    <div class="clip-search-row">
-      <input id="clipQuery" type="search"
-             placeholder='Describe an image: "red hair sunglasses", "beach selfie", "man in suit"...'>
-      <button id="clipSearch">Search by text</button>
-      <select id="scoreSort">
-        <option value="desc">Most similar first</option>
-        <option value="asc">Least similar first</option>
-      </select>
-      <button id="showRecent" class="secondary">Recent</button>
-    </div>
-
-    <div class="clip-controls">
-      <button id="startClip">Start CLIP Indexing</button>
-      <button id="stopClip" class="secondary">Stop</button>
-      <button id="reindexClip" class="secondary">Reindex all</button>
-    </div>
-
-    <div class="clip-progress-track">
-      <div id="clipProgressBar" class="clip-progress-bar"></div>
-    </div>
-    <div id="clipProgressText" class="status">CLIP is idle. Gallery remains available.</div>
-    <div id="clipStatus" class="status"></div>
-  </section>
-
   <section class="controls">
-    <input id="filter" type="search" placeholder="Filter visible usernames…">
-    <label class="toggle">
-      <input id="photosOnly" type="checkbox" checked>
-      <span>Photos only</span>
-    </label>
+    <input id="search" type="search" placeholder="Filter loaded usernames…">
+    <label class="toggle"><input id="photosOnly" type="checkbox" checked><span>Photos only</span></label>
     <button id="refresh">Refresh</button>
     <button id="clear" class="danger">Clear all</button>
   </section>
 
-  <p id="status" class="status">Stable gallery + CLIP build</p>
-
+  <p id="status" class="status"></p>
   <section id="gallery" class="gallery"></section>
-
-  <div class="footer-actions">
-    <button id="more">Load more</button>
-  </div>
+  <div class="footer-actions"><button id="more">Load more</button></div>
 </main>
-
-<script src="/static/gallery-clip-safe-v1.js?v=20260908-1"></script>
+<script src="/static/gallery-photo-v3.js?v=stable-light-1"></script>
 </body>
 </html>

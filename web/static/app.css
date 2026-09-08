@@ -17,167 +17,38 @@ button{border:1px solid #303038;border-radius:10px;padding:9px 12px;background:#
 .photo-link.broken{display:grid;place-items:center;background:#1e1e23}
 .photo-link.broken::after{content:"photo unavailable";font-size:11px;color:#777}
 
-
-/* ----- Light/Dark themes ----- */
 :root,
 html[data-theme="dark"]{
   --bg:#0a0a0c;
   --panel:#151519;
-  --panel-2:#1d1d22;
+  --panel2:#1f2025;
   --text:#f6f6f7;
   --muted:#999;
   --border:#2b2b32;
-  --button-bg:#f5f5f7;
-  --button-text:#111;
-  --input-bg:#151519;
-  --danger-bg:#301214;
-  --danger-text:#ffb4b4;
+  --button:#f5f5f7;
+  --buttonText:#111;
+  --input:#151519;
 }
 
 html[data-theme="light"]{
-  --bg:#f4f5f7;
-  --panel:#ffffff;
-  --panel-2:#eef0f3;
+  --bg:#f5f6f8;
+  --panel:#fff;
+  --panel2:#eef0f3;
   --text:#17181b;
   --muted:#6d7179;
-  --border:#d8dbe1;
-  --button-bg:#15171a;
-  --button-text:#fff;
-  --input-bg:#fff;
-  --danger-bg:#fff0f0;
-  --danger-text:#b42318;
+  --border:#d9dce2;
+  --button:#17181b;
+  --buttonText:#fff;
+  --input:#fff;
 }
 
-html,body{
-  background:var(--bg)!important;
-  color:var(--text)!important;
-}
-
-body,main,.profile-card,.clip-panel,.controls,.top{
-  color:var(--text);
-}
-
-.profile-card,.clip-panel{
-  background:var(--panel)!important;
-  border-color:var(--border)!important;
-}
-
-.controls{
-  background:color-mix(in srgb, var(--bg) 92%, transparent)!important;
-}
-
-.controls input[type="search"],
-.clip-search-row input,
-#scoreSort{
-  background:var(--input-bg)!important;
-  color:var(--text)!important;
-  border-color:var(--border)!important;
-}
-
-button{
-  background:var(--button-bg)!important;
-  color:var(--button-text)!important;
-  border-color:var(--border)!important;
-}
-
-button.secondary{
-  background:var(--panel-2)!important;
-  color:var(--text)!important;
-}
-
-button.danger{
-  background:var(--danger-bg)!important;
-  color:var(--danger-text)!important;
-}
-
+html,body{background:var(--bg)!important;color:var(--text)!important}
+.profile-card{background:var(--panel)!important;border-color:var(--border)!important}
+.controls{background:color-mix(in srgb,var(--bg) 92%,transparent)!important}
+.controls input[type="search"]{background:var(--input)!important;color:var(--text)!important;border-color:var(--border)!important}
+button{background:var(--button)!important;color:var(--buttonText)!important;border-color:var(--border)!important}
+button.secondary{background:var(--panel2)!important;color:var(--text)!important}
 .username{color:var(--text)!important}
 .full-name,.status{color:var(--muted)!important}
-
-.header-actions{
-  display:flex;
-  align-items:flex-start;
-  gap:12px;
-  flex-wrap:wrap;
-  justify-content:flex-end;
-}
-
-.clip-panel{
-  margin:0 0 14px;
-  padding:12px;
-  border:1px solid var(--border);
-  border-radius:14px;
-}
-
-.clip-search-row,
-.clip-controls{
-  display:flex;
-  gap:8px;
-  flex-wrap:wrap;
-}
-
-.clip-search-row input{
-  flex:1 1 320px;
-  min-width:0;
-  border:1px solid var(--border);
-  border-radius:11px;
-  padding:11px 12px;
-  font-size:15px;
-}
-
-#scoreSort{
-  border:1px solid var(--border);
-  border-radius:10px;
-  padding:9px 10px;
-}
-
-.clip-controls{
-  margin-top:9px;
-}
-
-.clip-progress-track{
-  height:10px;
-  margin-top:12px;
-  border-radius:999px;
-  overflow:hidden;
-  background:var(--panel-2);
-}
-
-.clip-progress-bar{
-  width:0;
-  height:100%;
-  background:var(--text);
-  transition:width .25s ease;
-}
-
-.photo-link{
-  position:relative;
-}
-
-.score{
-  position:absolute;
-  left:6px;
-  bottom:6px;
-  padding:4px 6px;
-  border-radius:7px;
-  background:rgba(0,0,0,.76);
-  color:#fff;
-  font-size:10px;
-  font-weight:700;
-}
-
-.photo-link.silent-placeholder{
-  background:var(--panel-2)!important;
-}
-
-@media(max-width:650px){
-  .top{
-    flex-direction:column;
-  }
-  .header-actions{
-    width:100%;
-    justify-content:space-between;
-  }
-  .clip-search-row > *{
-    flex:1 1 100%;
-  }
-}
+.header-actions{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;justify-content:flex-end}
+@media(max-width:650px){.top{flex-direction:column}.header-actions{width:100%;justify-content:space-between}}

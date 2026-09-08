@@ -1,4 +1,18 @@
 document.addEventListener("DOMContentLoaded", () => {
+  const savedTheme = localStorage.getItem("gallery_theme") || "light";
+  document.documentElement.dataset.theme = savedTheme;
+
+  const themeButton = document.getElementById("themeToggle");
+  if (themeButton) {
+    themeButton.textContent = savedTheme === "light" ? "Dark theme" : "Light theme";
+    themeButton.addEventListener("click", () => {
+      const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+      document.documentElement.dataset.theme = next;
+      localStorage.setItem("gallery_theme", next);
+      themeButton.textContent = next === "light" ? "Dark theme" : "Light theme";
+    });
+  }
+
   const $ = id => document.getElementById(id);
   const PAGE_SIZE = 250;
   let offset = 0;
