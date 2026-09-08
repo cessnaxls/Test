@@ -1,1 +1,1 @@
-print('CLIP model loads lazily at runtime after deploy.')
+print('CLIP disabled in stable rollback.')

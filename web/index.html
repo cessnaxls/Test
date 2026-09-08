@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Instagram Profile Gallery</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<main>
+  <header class="top">
+    <div>
+      <h1>Instagram Profile Gallery</h1>
+      <p>Your JavaScript scraper feeds this gallery directly.</p>
+    </div>
+    <div class="stats">
+      <div><b id="total">0</b><span>profiles</span></div>
+      <div><b id="photos">0</b><span>photos</span></div>
+    </div>
+  </header>
+
+  <section class="controls">
+    <input id="search" type="search" placeholder="Filter loaded usernames…">
+    <label class="toggle"><input id="photosOnly" type="checkbox" checked><span>Photos only</span></label>
+    <button id="refresh">Refresh</button>
+    <button id="clear" class="danger">Clear all</button>
+  </section>
+
+  <p id="status" class="status"></p>
+  <section id="gallery" class="gallery"></section>
+  <div class="footer-actions"><button id="more">Load more</button></div>
+</main>
+<script src="/static/gallery-photo-v3.js?v=20260907-3"></script>
+</body>
+</html>
