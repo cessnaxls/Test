@@ -2,7 +2,6 @@ services:
   - type: web
     name: instagram-profile-search
     runtime: python
-    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn -k uvicorn.workers.UvicornWorker -w 1 -b 0.0.0.0:$PORT server:app
     healthCheckPath: /health
@@ -11,11 +10,25 @@ services:
         value: 3.12.7
       - key: PROFILE_TABLE
         value: scraped_profiles_v2
-      - key: CLIP_INDEX_WORKERS
-        value: "16"
-      - key: CLIP_BATCH_SIZE
+      - key: HF_HOME
+        value: /tmp/hf
+      - key: CLIP_ONNX_REPO
+        value: onnx-community/clip-vit-base-patch32-ONNX
+      - key: CLIP_PROCESSOR_REPO
+        value: openai/clip-vit-base-patch32
+      - key: CLIP_ONNX_FILE
+        value: onnx/model_quantized.onnx
+      - key: CLIP_CLAIM_SIZE
+        value: "128"
+      - key: CLIP_INFER_BATCH
         value: "64"
+      - key: CLIP_DOWNLOAD_WORKERS
+        value: "32"
+      - key: CLIP_READY_QUEUE
+        value: "256"
+      - key: CLIP_INTRA_THREADS
+        value: "4"
       - key: CLIP_POLL_SECONDS
-        value: "0.15"
-      - key: GPU_TIMEOUT_SECONDS
-        value: "90"
+        value: "0.10"
+      - key: CLIP_TARGET_RATE
+        value: "10.0"

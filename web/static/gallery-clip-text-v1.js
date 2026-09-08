@@ -103,9 +103,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const pct = total ? Math.round((indexed / total) * 100) : 0;
 
       $("clipProgressBar").style.width = `${pct}%`;
-      const gpuRate = Number(data.gpu_images_per_second || 0);
       $("clipProgressText").textContent =
-        `${indexed.toLocaleString()} indexed · ${Number(data.queued || 0).toLocaleString()} queued · ${processing.toLocaleString()} processing · ${failed.toLocaleString()} failed · ${pct}%${gpuRate ? ` · GPU ${gpuRate.toFixed(1)}/s` : ""}`;
+        `${indexed.toLocaleString()} indexed · ${Number(data.queued || 0).toLocaleString()} queued · ${processing.toLocaleString()} processing · ${failed.toLocaleString()} failed · ${pct}%`;
 
       if (data.last_error) {
         $("clipStatus").textContent = `Last error: ${data.last_error}`;
