@@ -4,6 +4,7 @@ import os
 import re
 import io
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import numpy as np
@@ -90,6 +91,102 @@ def clean_username(value: Any) -> str:
     username = str(value or "").strip().lstrip("@").lower()
     return username if USERNAME_RE.fullmatch(username) else ""
 
+
+def _download_avatar_bytes(url: str) -> bytes:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1",
+        "Referer": "https://www.instagram.com/",
+        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+    }
+    r = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
+    r.raise_for_status()
+    if not r.headers.get("content-type", "").startswith("image/"):
+        raise RuntimeError("avatar URL did not return an image")
+    if len(r.content) > 8_000_000:
+        raise RuntimeError("avatar is too large")
+    return r.content
+
+
+def index_pending_profiles(limit: int = 100):
+    limit = max(1, min(int(limit), 250))
+    rows = supa(
+        "GET",
+        TABLE,
+        params={
+            "select": "username,image_url",
+            "image_url": "neq.",
+            "clip_embedding": "is.null",
+            "limit": str(limit),
+            "order": "last_seen.desc",
+        },
+    )
+    if not rows:
+        return {"requested": limit, "pending": 0, "downloaded": 0, "indexed": 0, "failed": 0}
+
+    downloaded = {}
+    failures = {}
+    workers = min(16, max(1, len(rows)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        jobs = {pool.submit(_download_avatar_bytes, row["image_url"]): row["username"] for row in rows}
+        for future in as_completed(jobs):
+            username = jobs[future]
+            try:
+                downloaded[username] = future.result()
+            except Exception as exc:
+                failures[username] = str(exc)[:240]
+
+    indexed_rows = []
+    if downloaded:
+        try:
+            from clip_engine import image_embeddings
+            usernames = list(downloaded)
+            vectors = image_embeddings([downloaded[u] for u in usernames])
+            indexed_rows = [
+                {
+                    "username": username,
+                    "clip_embedding": json.dumps(vector, separators=(",", ":")),
+                }
+                for username, vector in zip(usernames, vectors)
+            ]
+        except Exception as exc:
+            for username in downloaded:
+                failures[username] = f"embedding failed: {str(exc)[:200]}"
+            indexed_rows = []
+
+    # Upsert only the index columns; existing profile metadata remains intact.
+    for start in range(0, len(indexed_rows), 100):
+        supa(
+            "POST",
+            f"{TABLE}?on_conflict=username",
+            payload=indexed_rows[start:start + 100],
+            prefer="resolution=merge-duplicates,return=minimal",
+        )
+
+    # clip_index_status/error are optional upgrade columns. If they exist, record
+    # failed downloads; if they do not, indexing still works via clip_embedding.
+    if failures:
+        failed_rows = [
+            {"username": u, "clip_index_status": "error", "clip_error": e}
+            for u, e in failures.items()
+        ]
+        try:
+            supa(
+                "POST",
+                f"{TABLE}?on_conflict=username",
+                payload=failed_rows,
+                prefer="resolution=merge-duplicates,return=minimal",
+            )
+        except HTTPException:
+            pass
+
+    return {
+        "requested": limit,
+        "pending": len(rows),
+        "downloaded": len(downloaded),
+        "indexed": len(indexed_rows),
+        "failed": len(failures),
+    }
+
 @app.get("/", response_class=HTMLResponse)
 def home():
     with open(os.path.join(BASE, "web", "index.html"), "r", encoding="utf-8") as f:
@@ -99,7 +196,7 @@ def home():
 def health():
     return {
         "ok": True,
-        "version": "1.0.1",
+        "version": "1.1.0",
         "supabase_configured": bool(SUPABASE_URL and SUPABASE_KEY),
         "table": TABLE,
         "key_type": (
@@ -229,7 +326,7 @@ def avatar(url: str = Query(..., min_length=8, max_length=5000)):
         content=r.content,
         media_type=content_type,
         headers={
-            "Cache-Control": "public, max-age=3600",
+            "Cache-Control": "public, max-age=86400, stale-while-revalidate=604800",
         },
     )
 
@@ -305,6 +402,11 @@ async def search_by_image(
         "indexed_searched": len(scored),
         "profiles": scored[:limit],
     }
+
+
+@app.post("/api/index/pending")
+def index_pending(limit: int = Query(default=100, ge=1, le=250)):
+    return index_pending_profiles(limit)
 
 
 @app.get("/api/search/status")

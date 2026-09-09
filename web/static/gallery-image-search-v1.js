@@ -32,6 +32,10 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   function avatarSrc(profile) {
+    return profile.image_url || "";
+  }
+
+  function proxySrc(profile) {
     if (!profile.image_url) return "";
     return `/api/avatar?url=${encodeURIComponent(profile.image_url)}`;
   }
@@ -41,14 +45,15 @@ document.addEventListener("DOMContentLoaded", () => {
     const url = esc(profile.profile_url);
     const name = esc(profile.full_name || "");
     const img = avatarSrc(profile);
+    const proxy = proxySrc(profile);
     const score = profile.score == null
       ? ""
       : `<div class="score">CLIP ${Number(profile.score).toFixed(4)}</div>`;
 
     const visual = img
       ? `<a class="photo-link" href="${url}" target="_blank" rel="noopener">
-           <img src="${esc(img)}" loading="lazy" decoding="async"
-             onerror="this.style.display='none';this.closest('.photo-link').classList.add('silent-placeholder')">
+           <img src="${esc(img)}" data-proxy="${esc(proxy)}" loading="lazy" decoding="async" referrerpolicy="no-referrer"
+             onerror="if(!this.dataset.triedProxy&&this.dataset.proxy){this.dataset.triedProxy='1';this.src=this.dataset.proxy}else{this.style.display='none';this.closest('.photo-link').classList.add('silent-placeholder')}">
            ${score}
          </a>`
       : `<a class="photo-link silent-placeholder" href="${url}" target="_blank" rel="noopener">${score}</a>`;

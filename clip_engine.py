@@ -121,7 +121,13 @@ def _image_matrix(outputs):
     return matrix
 
 
+def image_embeddings(data_items: list[bytes]):
+    if not data_items:
+        return []
+    images = [Image.open(io.BytesIO(data)).convert("RGB") for data in data_items]
+    outputs = _run(images, ["a photo"])
+    return _image_matrix(outputs).tolist()
+
+
 def image_embedding(data: bytes):
-    image = Image.open(io.BytesIO(data)).convert("RGB")
-    outputs = _run([image], ["a photo"])
-    return _image_matrix(outputs)[0].tolist()
+    return image_embeddings([data])[0]
