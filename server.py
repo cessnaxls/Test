@@ -107,8 +107,9 @@ def _download_avatar_bytes(url: str) -> bytes:
     return r.content
 
 
-def index_pending_profiles(limit: int = 100):
+def index_pending_profiles(limit: int = 100, workers: int = 16):
     limit = max(1, min(int(limit), 250))
+    workers = max(1, min(int(workers), 64))
     rows = supa(
         "GET",
         TABLE,
@@ -125,8 +126,8 @@ def index_pending_profiles(limit: int = 100):
 
     downloaded = {}
     failures = {}
-    workers = min(16, max(1, len(rows)))
-    with ThreadPoolExecutor(max_workers=workers) as pool:
+    active_workers = min(workers, max(1, len(rows)))
+    with ThreadPoolExecutor(max_workers=active_workers) as pool:
         jobs = {pool.submit(_download_avatar_bytes, row["image_url"]): row["username"] for row in rows}
         for future in as_completed(jobs):
             username = jobs[future]
@@ -185,6 +186,7 @@ def index_pending_profiles(limit: int = 100):
         "downloaded": len(downloaded),
         "indexed": len(indexed_rows),
         "failed": len(failures),
+        "workers": workers,
     }
 
 @app.get("/", response_class=HTMLResponse)
@@ -273,6 +275,28 @@ def get_profiles(
         params["image_url"] = "neq."
     rows = supa("GET", TABLE, params=params)
     return {"profiles": rows, "limit": limit, "offset": offset}
+
+@app.get("/api/profiles/all")
+def get_all_profiles(photos_only: bool = Query(default=False)):
+    rows_all = []
+    offset = 0
+    page = 1000
+    while True:
+        params = {
+            "select": "username,full_name,profile_url,image_url,source_url,first_seen,last_seen,seen_count",
+            "order": "last_seen.desc",
+            "limit": str(page),
+            "offset": str(offset),
+        }
+        if photos_only:
+            params["image_url"] = "neq."
+        rows = supa("GET", TABLE, params=params)
+        rows_all.extend(rows)
+        if len(rows) < page:
+            break
+        offset += page
+    return {"profiles": rows_all, "count": len(rows_all)}
+
 
 @app.get("/api/stats")
 def stats():
@@ -405,8 +429,11 @@ async def search_by_image(
 
 
 @app.post("/api/index/pending")
-def index_pending(limit: int = Query(default=100, ge=1, le=250)):
-    return index_pending_profiles(limit)
+def index_pending(
+    limit: int = Query(default=100, ge=1, le=250),
+    workers: int = Query(default=16, ge=1, le=64),
+):
+    return index_pending_profiles(limit, workers)
 
 
 @app.get("/api/search/status")

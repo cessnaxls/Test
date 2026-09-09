@@ -4,15 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>Instagram Profile Gallery</title>
-  <link rel="stylesheet" href="/static/app.css?v=image-search-v1">
+  <link rel="stylesheet" href="/static/app.css?v=workers-v2">
 </head>
 <body>
 <main>
   <header class="top">
-    <div>
-      <h1>Instagram Profile Gallery</h1>
-      <p>Scraped profile photos with image similarity search.</p>
-    </div>
+    <div><h1>Instagram Profile Gallery</h1><p>Scraped profile photos with image similarity search.</p></div>
     <div class="header-actions">
       <button id="themeToggle" class="secondary">Dark theme</button>
       <div class="stats">
@@ -27,30 +24,33 @@
     <div class="image-search-row">
       <input id="queryImage" type="file" accept="image/*">
       <button id="imageSearch">Find similar photos</button>
-      <select id="scoreSort">
-        <option value="desc">Most similar first</option>
-        <option value="asc">Least similar first</option>
-      </select>
+      <select id="scoreSort"><option value="desc">Most similar first</option><option value="asc">Least similar first</option></select>
       <button id="showRecent" class="secondary">Recent</button>
     </div>
     <div id="imageSearchStatus" class="status">Choose an image to search the indexed profile photos.</div>
   </section>
 
   <section class="controls">
-    <input id="filter" type="search" placeholder="Filter visible usernames…">
-    <label class="toggle">
-      <input id="photosOnly" type="checkbox" checked>
-      <span>Photos only</span>
+    <input id="filter" type="search" placeholder="Filter usernames…">
+    <label class="toggle"><input id="photosOnly" type="checkbox" checked><span>Photos only</span></label>
+    <label class="worker-control"><span>Photo workers</span>
+      <select id="photoWorkers"><option>4</option><option>8</option><option>16</option><option selected>32</option><option>48</option><option>64</option></select>
     </label>
-    <button id="refresh">Refresh</button>
+    <label class="worker-control"><span>Index workers</span>
+      <select id="indexWorkers"><option>2</option><option>4</option><option>8</option><option selected>16</option><option>24</option><option>32</option><option>48</option><option>64</option></select>
+    </label>
+    <button id="indexNow" class="secondary">Index all pending</button>
+    <button id="refresh">Refresh all</button>
     <button id="clear" class="danger">Clear all</button>
   </section>
 
+  <div class="throughput-status">
+    <span id="photoLoadStatus">Photo loader idle</span>
+    <span id="indexStatus">Indexer idle</span>
+  </div>
   <p id="status" class="status"></p>
   <section id="gallery" class="gallery"></section>
-  <div class="footer-actions"><button id="more">Load more</button></div>
 </main>
-
-<script src="/static/gallery-image-search-v1.js?v=20260909-2"></script>
+<script src="/static/gallery-image-search-v2.js?v=20260909-workers-1"></script>
 </body>
 </html>
